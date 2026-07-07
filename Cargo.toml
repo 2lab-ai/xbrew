@@ -1,13 +1,13 @@
 [package]
-name = "nobrew"
-version = "0.1.2"
+name = "xbrew"
+version = "0.2.0"
 edition = "2021"
 description = "One install/uninstall over brew, pacman, and recipes (macOS + Arch)."
 license = "MIT"
-repository = "https://github.com/2lab-ai/nobrew"
+repository = "https://github.com/2lab-ai/xbrew"
 
 [[bin]]
-name = "nobrew"
+name = "xbrew"
 path = "src/main.rs"
 
 [dependencies]

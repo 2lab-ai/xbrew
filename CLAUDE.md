@@ -1,4 +1,4 @@
-# nobrew — working notes
+# xbrew — working notes
 
 Cross-platform (macOS + Arch Linux) package wrapper. One `install` / `uninstall`
 over brew, pacman, and recipes; the backend used per package is recorded so
@@ -19,12 +19,12 @@ CI (`.github/workflows/ci.yml`) runs the exact same gate on macOS and Linux.
 src/
   main.rs       CLI (clap) + dispatch
   platform.rs   macOS vs Arch detection
-  state.rs      ~/.nobrew/state.json — package -> backend record (drives uninstall)
-  recipe.rs     "arch-cask" TOML recipes (built-in + ~/.nobrew/recipes/*.toml)
+  state.rs      ~/.xbrew/state.json — package -> backend record (drives uninstall)
+  recipe.rs     "arch-cask" TOML recipes (built-in + ~/.xbrew/recipes/*.toml)
   resolve.rs    install/uninstall orchestration + backend helpers
   util.rs       command runners, which, paths
-recipes/        built-in recipes, embedded via include_str!
-build.rs        bakes NOBREW_BUILD_ID into --version
+recipes/        built-in recipes, whole dir embedded via include_dir
+build.rs        bakes XBREW_BUILD_ID into --version
 ```
 
 ## Backend resolution
@@ -51,20 +51,20 @@ First backend that can provide the package wins; the choice lands in
   a `preview-<YYYY-MM-DD-HHMM>-<sha12>` prerelease (keeps the newest 15).
 - **Stable**: `just release` tags `v<version>` and pushes → `release.yml` builds
   the 4 targets and publishes the release. `install.sh` pulls from it.
-- Targets: `nobrew-macos-aarch64`, `nobrew-macos-x86_64`, `nobrew-linux-x86_64`,
-  `nobrew-linux-aarch64`. Each release also carries `SHA256SUMS`.
+- Targets: `xbrew-macos-aarch64`, `xbrew-macos-x86_64`, `xbrew-linux-x86_64`,
+  `xbrew-linux-aarch64`. Each release also carries `SHA256SUMS`.
 
 ## Distribution
 
 `curl -fsSL .../install.sh | bash` downloads the matching prebuilt binary and
-verifies it against `SHA256SUMS`. No Homebrew tap — nobrew is not distributed
-through a package manager (that would be the bootstrap paradox). `nobrew
+verifies it against `SHA256SUMS`. No Homebrew tap — xbrew is not distributed
+through a package manager (that would be the bootstrap paradox). `xbrew
 self-update` just re-runs the installer.
 
 ## Recipes ("arch-casks")
 
 Anything not in plain brew/pacman is a small TOML file in `recipes/`
-(embedded) or `~/.nobrew/recipes/*.toml` (user, overrides built-ins):
+(embedded) or `~/.xbrew/recipes/*.toml` (user, overrides built-ins):
 
 ```toml
 name = "nomachine"

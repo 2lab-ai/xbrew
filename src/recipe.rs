@@ -53,7 +53,7 @@ pub struct MacSpec {
 }
 
 /// Every `recipes/*.toml` (embedded) plus user recipes in
-/// `~/.nobrew/recipes/*.toml`, which override built-ins by name.
+/// `~/.xbrew/recipes/*.toml`, which override built-ins by name.
 pub fn registry() -> BTreeMap<String, Recipe> {
     let mut map = BTreeMap::new();
     for file in BUILTIN_RECIPES.files() {
@@ -84,7 +84,7 @@ pub fn registry() -> BTreeMap<String, Recipe> {
 }
 
 fn user_recipe_dir() -> anyhow::Result<std::path::PathBuf> {
-    Ok(util::nobrew_dir()?.join("recipes"))
+    Ok(util::xbrew_dir()?.join("recipes"))
 }
 
 pub fn get(name: &str) -> Option<Recipe> {

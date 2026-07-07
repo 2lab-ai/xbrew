@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# nobrew installer — downloads a prebuilt binary, no toolchain needed.
-#   curl -fsSL https://raw.githubusercontent.com/2lab-ai/nobrew/HEAD/install.sh | bash
-#   ... | NOBREW_CHANNEL=preview bash    # bleeding-edge preview build
+# xbrew installer — downloads a prebuilt binary, no toolchain needed.
+#   curl -fsSL https://raw.githubusercontent.com/2lab-ai/xbrew/HEAD/install.sh | bash
+#   ... | XBREW_CHANNEL=preview bash    # bleeding-edge preview build
 set -euo pipefail
 
-REPO="${NOBREW_REPO_SLUG:-2lab-ai/nobrew}"
-CHANNEL="${NOBREW_CHANNEL:-stable}"
-PREFIX="${NOBREW_PREFIX:-$HOME/.nobrew}"
+REPO="${XBREW_REPO_SLUG:-2lab-ai/xbrew}"
+CHANNEL="${XBREW_CHANNEL:-stable}"
+PREFIX="${XBREW_PREFIX:-$HOME/.xbrew}"
 BINDIR="$PREFIX/bin"
 
 say()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -16,15 +16,15 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 case "$(uname -s)" in
   Darwin) OSNAME=macos ;;
   Linux)  OSNAME=linux ;;
-  *) die "unsupported OS: $(uname -s) (nobrew targets macOS and Linux)" ;;
+  *) die "unsupported OS: $(uname -s) (xbrew targets macOS and Linux)" ;;
 esac
 case "$(uname -m)" in
   arm64|aarch64) ARCHNAME=aarch64 ;;
   x86_64|amd64)  ARCHNAME=x86_64 ;;
   *) die "unsupported arch: $(uname -m)" ;;
 esac
-ASSET="nobrew-${OSNAME}-${ARCHNAME}"
-say "nobrew installer — ${OSNAME}/${ARCHNAME}, channel: ${CHANNEL}"
+ASSET="xbrew-${OSNAME}-${ARCHNAME}"
+say "xbrew installer — ${OSNAME}/${ARCHNAME}, channel: ${CHANNEL}"
 
 # 2. Resolve the release tag
 if [ "$CHANNEL" = "preview" ]; then
@@ -36,7 +36,7 @@ else
   TAG="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
     "https://github.com/${REPO}/releases/latest" | sed 's#.*/tag/##')"
   case "$TAG" in
-    ""|*/*) die "no stable release yet for ${REPO} — try NOBREW_CHANNEL=preview" ;;
+    ""|*/*) die "no stable release yet for ${REPO} — try XBREW_CHANNEL=preview" ;;
   esac
 fi
 say "release: ${TAG}"
@@ -62,18 +62,18 @@ fi
 
 # 5. Install
 mkdir -p "$BINDIR"
-install -m 0755 "$TMP/$ASSET" "$BINDIR/nobrew"
-say "installed to ${BINDIR}/nobrew"
+install -m 0755 "$TMP/$ASSET" "$BINDIR/xbrew"
+say "installed to ${BINDIR}/xbrew"
 
 # 6. PATH hint
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
   *)
     echo
-    echo "Add nobrew to your PATH:"
+    echo "Add xbrew to your PATH:"
     echo "  fish:      fish_add_path $BINDIR"
     echo "  bash/zsh:  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.profile"
     ;;
 esac
 echo
-say "done — try: nobrew install nomachine"
+say "done — try: xbrew install nomachine"

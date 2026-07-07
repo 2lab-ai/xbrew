@@ -8,9 +8,9 @@ pub fn home() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME environment variable is not set"))
 }
 
-/// `~/.nobrew`, created if missing.
-pub fn nobrew_dir() -> Result<PathBuf> {
-    let d = home()?.join(".nobrew");
+/// `~/.xbrew`, created if missing.
+pub fn xbrew_dir() -> Result<PathBuf> {
+    let d = home()?.join(".xbrew");
     std::fs::create_dir_all(&d).with_context(|| format!("creating {}", d.display()))?;
     Ok(d)
 }

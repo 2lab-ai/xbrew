@@ -9,13 +9,13 @@ use clap::{Parser, Subcommand};
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (build ",
-    env!("NOBREW_BUILD_ID"),
+    env!("XBREW_BUILD_ID"),
     ")"
 );
 
 #[derive(Parser)]
 #[command(
-    name = "nobrew",
+    name = "xbrew",
     version = VERSION,
     about = "One install/uninstall over brew, pacman, and recipes (macOS + Arch)."
 )]
@@ -30,13 +30,13 @@ enum Cmd {
     Install { name: String },
     /// Uninstall a package (routes to whatever backend installed it)
     Uninstall { name: String },
-    /// List packages nobrew has installed
+    /// List packages xbrew has installed
     List,
     /// Show a package and how it would be installed here
     Info { name: String },
     /// Search brew, pacman, and recipes
     Search { query: String },
-    /// Update nobrew itself to the latest build
+    /// Update xbrew itself to the latest build
     SelfUpdate,
 }
 

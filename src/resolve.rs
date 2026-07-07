@@ -10,10 +10,8 @@ use crate::util;
 // ---------------------------------------------------------------------------
 
 pub fn install(name: &str) -> Result<()> {
-    if name == "nobrew" {
-        bail!(
-            "nobrew installs *other* things — to update nobrew itself, run `nobrew self-update`."
-        );
+    if name == "xbrew" {
+        bail!("xbrew installs *other* things — to update xbrew itself, run `xbrew self-update`.");
     }
     let mut state = State::load()?;
     if let Some(rec) = state.packages.get(name) {
@@ -27,13 +25,13 @@ pub fn install(name: &str) -> Result<()> {
     let record = match plat {
         Platform::MacOS => install_macos(name, recipe.as_ref())?,
         Platform::Arch => install_arch(name, recipe.as_ref())?,
-        Platform::Other => bail!("nobrew supports only macOS and Arch Linux"),
+        Platform::Other => bail!("xbrew supports only macOS and Arch Linux"),
     };
 
     state.packages.insert(name.to_string(), record.clone());
     state.save()?;
     println!(
-        "\n✓ installed '{name}' via {} — tracked by nobrew.",
+        "\n✓ installed '{name}' via {} — tracked by xbrew.",
         record.backend
     );
     Ok(())
@@ -115,7 +113,7 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     if let Some(r) = recipe {
         if let Some(cask) = &r.macos.cask {
             if !has_brew {
-                bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `nobrew install brew` first.");
+                bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `xbrew install brew` first.");
             }
             brew_install(cask, "cask")?;
             return Ok(Record {
@@ -155,7 +153,7 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         bail!("no backend can install '{name}' on macOS (no recipe, and not in brew)");
     }
 
-    bail!("Homebrew isn't installed and there's no recipe for '{name}'. Run `nobrew install brew` first.")
+    bail!("Homebrew isn't installed and there's no recipe for '{name}'. Run `xbrew install brew` first.")
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +163,7 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
 pub fn uninstall(name: &str) -> Result<()> {
     let mut state = State::load()?;
     let rec = state.packages.get(name).cloned().ok_or_else(|| {
-        anyhow!("'{name}' is not managed by nobrew — nothing to uninstall.\n(nobrew only removes what it installed; see `nobrew list`.)")
+        anyhow!("'{name}' is not managed by xbrew — nothing to uninstall.\n(xbrew only removes what it installed; see `xbrew list`.)")
     })?;
 
     match rec.backend.as_str() {
@@ -190,7 +188,7 @@ pub fn uninstall(name: &str) -> Result<()> {
         "script" => match recipe::get(name).and_then(|r| r.script.uninstall) {
             Some(cmd) => util::run("sh", &["-c", &cmd])?,
             None => println!(
-                "note: '{name}' was installed by its own script and has no uninstaller — removing from nobrew tracking only."
+                "note: '{name}' was installed by its own script and has no uninstaller — removing from xbrew tracking only."
             ),
         },
         other => bail!("don't know how to uninstall backend '{other}'"),
@@ -202,14 +200,14 @@ pub fn uninstall(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Re-run the published installer to pull the latest nobrew binary.
+/// Re-run the published installer to pull the latest xbrew binary.
 pub fn self_update() -> Result<()> {
-    println!("updating nobrew (fetching the latest install.sh)…");
+    println!("updating xbrew (fetching the latest install.sh)…");
     util::run(
         "sh",
         &[
             "-c",
-            "curl -fsSL https://raw.githubusercontent.com/2lab-ai/nobrew/HEAD/install.sh | bash",
+            "curl -fsSL https://raw.githubusercontent.com/2lab-ai/xbrew/HEAD/install.sh | bash",
         ],
     )
 }
@@ -277,7 +275,7 @@ fn aur_install(pkg: &str) -> Result<()> {
     if !util::which("makepkg") {
         bail!("makepkg not found — install base-devel: sudo pacman -S --needed base-devel git");
     }
-    let cache = util::nobrew_dir()?.join("aur");
+    let cache = util::xbrew_dir()?.join("aur");
     std::fs::create_dir_all(&cache)?;
     let dir = cache.join(pkg);
     if dir.join(".git").exists() {
@@ -293,7 +291,7 @@ fn aur_install(pkg: &str) -> Result<()> {
 /// Download a .dmg, mount it (auto-accepting any license), copy the app into
 /// /Applications, strip quarantine, and detach. Returns the installed app path.
 fn dmg_install(url: &str, app: &str) -> Result<String> {
-    let cache = util::nobrew_dir()?.join("cache");
+    let cache = util::xbrew_dir()?.join("cache");
     std::fs::create_dir_all(&cache)?;
     let dmg = cache.join(format!("{app}.dmg"));
     util::run("curl", &["-L", "-o", dmg.to_str().unwrap(), url])?;
@@ -328,7 +326,7 @@ fn dmg_install(url: &str, app: &str) -> Result<String> {
 pub fn list() -> Result<()> {
     let state = State::load()?;
     if state.packages.is_empty() {
-        println!("nothing installed by nobrew yet. Try: nobrew install <name>");
+        println!("nothing installed by xbrew yet. Try: xbrew install <name>");
         return Ok(());
     }
     println!("{:<24} {:<12} REFERENCE", "PACKAGE", "BACKEND");
@@ -390,7 +388,7 @@ pub fn search(query: &str) -> Result<()> {
     let recs = recipe::registry();
     let hits: Vec<&String> = recs.keys().filter(|k| k.contains(query)).collect();
     if !hits.is_empty() {
-        println!("== nobrew recipes ==");
+        println!("== xbrew recipes ==");
         for h in hits {
             println!("  {h}");
         }

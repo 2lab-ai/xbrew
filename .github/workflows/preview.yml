@@ -2,7 +2,7 @@ name: Preview
 
 # Publishes a prerelease `preview-<YYYY-MM-DD-HHMM>-<sha12>` with 4 binaries
 # + SHA256SUMS on every push to main/master (and on demand). install.sh can
-# pull these with NOBREW_CHANNEL=preview.
+# pull these with XBREW_CHANNEL=preview.
 
 on:
   workflow_dispatch:
@@ -55,21 +55,21 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: nobrew-macos-aarch64
+            name: xbrew-macos-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: nobrew-macos-x86_64
+            name: xbrew-macos-x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: nobrew-linux-x86_64
+            name: xbrew-linux-x86_64
           # Native arm64 runner (free for public repos) — no cross/zigbuild needed.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            name: nobrew-linux-aarch64
+            name: xbrew-linux-aarch64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
-      NOBREW_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+      XBREW_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp "target/${{ matrix.target }}/release/nobrew" "${{ matrix.name }}"
+          cp "target/${{ matrix.target }}/release/xbrew" "${{ matrix.name }}"
           if [ "${{ runner.os }}" = "Linux" ]; then
             sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
           else
@@ -128,15 +128,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          for asset in nobrew-macos-aarch64 nobrew-macos-x86_64 nobrew-linux-x86_64 nobrew-linux-aarch64; do
+          for asset in xbrew-macos-aarch64 xbrew-macos-x86_64 xbrew-linux-x86_64 xbrew-linux-aarch64; do
             cp "artifacts/$asset/$asset" "release/$asset"
           done
-          (cd release && sha256sum nobrew-* > SHA256SUMS)
+          (cd release && sha256sum xbrew-* > SHA256SUMS)
           cat release/SHA256SUMS
           {
             echo "Preview build \`${{ needs.preflight.outputs.build_id }}\` from ${{ needs.preflight.outputs.commit }}."
             echo
-            echo "Install: \`curl -fsSL https://raw.githubusercontent.com/2lab-ai/nobrew/HEAD/install.sh | NOBREW_CHANNEL=preview bash\`"
+            echo "Install: \`curl -fsSL https://raw.githubusercontent.com/2lab-ai/xbrew/HEAD/install.sh | XBREW_CHANNEL=preview bash\`"
             echo
             echo '```'
             cat release/SHA256SUMS
@@ -153,10 +153,10 @@ jobs:
           make_latest: false
           target_commitish: ${{ needs.preflight.outputs.commit }}
           files: |
-            release/nobrew-macos-aarch64
-            release/nobrew-macos-x86_64
-            release/nobrew-linux-x86_64
-            release/nobrew-linux-aarch64
+            release/xbrew-macos-aarch64
+            release/xbrew-macos-x86_64
+            release/xbrew-linux-x86_64
+            release/xbrew-linux-aarch64
             release/SHA256SUMS
 
       - name: Prune old preview prereleases (keep 15)

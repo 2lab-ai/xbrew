@@ -20,17 +20,17 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: nobrew-macos-aarch64
+            name: xbrew-macos-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: nobrew-macos-x86_64
+            name: xbrew-macos-x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: nobrew-linux-x86_64
+            name: xbrew-linux-x86_64
           # Native arm64 runner (free for public repos) — no cross/zigbuild needed.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            name: nobrew-linux-aarch64
+            name: xbrew-linux-aarch64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -51,7 +51,7 @@ jobs:
 
       - name: Set build id
         shell: bash
-        run: echo "NOBREW_BUILD_ID=${GITHUB_REF_NAME}-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+        run: echo "XBREW_BUILD_ID=${GITHUB_REF_NAME}-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -70,7 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp "target/${{ matrix.target }}/release/nobrew" "${{ matrix.name }}"
+          cp "target/${{ matrix.target }}/release/xbrew" "${{ matrix.name }}"
           if [ "${{ runner.os }}" = "Linux" ]; then
             sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
           else
@@ -105,10 +105,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          for asset in nobrew-macos-aarch64 nobrew-macos-x86_64 nobrew-linux-x86_64 nobrew-linux-aarch64; do
+          for asset in xbrew-macos-aarch64 xbrew-macos-x86_64 xbrew-linux-x86_64 xbrew-linux-aarch64; do
             cp "artifacts/$asset/$asset" "release/$asset"
           done
-          (cd release && sha256sum nobrew-* > SHA256SUMS)
+          (cd release && sha256sum xbrew-* > SHA256SUMS)
           cat release/SHA256SUMS
 
       - name: Create release
@@ -116,8 +116,8 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            release/nobrew-macos-aarch64
-            release/nobrew-macos-x86_64
-            release/nobrew-linux-x86_64
-            release/nobrew-linux-aarch64
+            release/xbrew-macos-aarch64
+            release/xbrew-macos-x86_64
+            release/xbrew-linux-x86_64
+            release/xbrew-linux-aarch64
             release/SHA256SUMS

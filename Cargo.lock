@@ -170,18 +170,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
-name = "nobrew"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "clap",
- "include_dir",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
 name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -349,6 +337,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "xbrew"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "include_dir",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

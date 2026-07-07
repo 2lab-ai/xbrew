@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::util;
 
 /// One installed package, remembering which backend put it there so
-/// `nobrew uninstall` can route to the right remover.
+/// `xbrew uninstall` can route to the right remover.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Record {
     /// backend: brew | pacman | aur | flatpak | recipe-dmg
@@ -30,7 +30,7 @@ pub struct State {
 
 impl State {
     pub fn path() -> Result<PathBuf> {
-        Ok(util::nobrew_dir()?.join("state.json"))
+        Ok(util::xbrew_dir()?.join("state.json"))
     }
 
     pub fn load() -> Result<State> {

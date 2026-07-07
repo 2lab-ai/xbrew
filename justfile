@@ -1,4 +1,4 @@
-# nobrew task runner (2lab.ai / herdr conventions)
+# xbrew task runner (2lab.ai / herdr conventions)
 
 # Format + lint + test — the gate before every commit
 check:
