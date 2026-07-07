@@ -1,0 +1,10 @@
+name = "telegram"
+description = "Telegram Desktop"
+
+# Arch: prebuilt AUR package via makepkg (matches how it was installed).
+[arch]
+aur = "telegram-desktop-bin"
+
+# macOS: Homebrew cask.
+[macos]
+cask = "telegram"

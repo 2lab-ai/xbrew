@@ -30,7 +30,7 @@ Update later with `nobrew self-update`.
 | Platform | It tries, in order |
 |----------|--------------------|
 | **macOS** | Homebrew formula/cask → recipe (cask / `.dmg`) |
-| **Arch**  | Homebrew → `pacman` → recipe (AUR via `makepkg` / Flatpak) |
+| **Arch**  | recipe (AUR `makepkg` / Flatpak) → Homebrew → `pacman` → **any AUR package** (`makepkg`) |
 
 The first one that has your package wins, and the choice is written to
 `~/.nobrew/state.json`. Uninstall reads that and calls the right remover
@@ -53,8 +53,9 @@ nobrew self-update
 Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. A recipe is
 **authoritative** — if one exists for a name, nobrew installs it that way instead
 of guessing from a same-named brew/pacman package. Built-ins: `brew`, `claude`,
-`claude-code`, `nomachine`, `rustdesk`, `slack`, `sunshine`. Add your own in
-`~/.nobrew/recipes/*.toml`:
+`claude-code`, `nomachine`, `rustdesk`, `slack`, `sunshine`, `telegram` — and
+anything in the AUR works without a recipe at all. Add your own by dropping a
+file in `recipes/` (shipped) or `~/.nobrew/recipes/*.toml` (local):
 
 ```toml
 name = "nomachine"

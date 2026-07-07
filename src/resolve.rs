@@ -92,7 +92,19 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         });
     }
 
-    bail!("no backend can install '{name}' on Arch (no recipe, and not in brew or pacman)")
+    // Generic AUR fallback: any package that exists in the AUR gets the same
+    // git-clone + makepkg -si you'd do by hand — no recipe required.
+    if aur_exists(name) {
+        aur_install(name)?;
+        return Ok(Record {
+            backend: "aur".into(),
+            reference: name.into(),
+            kind: None,
+            artifacts: vec![],
+        });
+    }
+
+    bail!("no backend can install '{name}' on Arch (no recipe; not in brew, pacman, or the AUR)")
 }
 
 /// macOS: a curated recipe is authoritative when it declares a macOS/script
@@ -247,6 +259,16 @@ fn recipe_script_install(name: &str, r: &Recipe) -> Option<Result<Record>> {
         }
     }
     Some(util::run("sh", &["-c", install]).map(|_| record))
+}
+
+/// Does the AUR have a package by this exact name? (Cheap check via `git
+/// ls-remote` — no JSON parsing, no extra dependency.)
+fn aur_exists(pkg: &str) -> bool {
+    if !util::which("git") {
+        return false;
+    }
+    let url = format!("https://aur.archlinux.org/{pkg}.git");
+    util::probe("git", &["ls-remote", &url])
 }
 
 /// Clone the AUR package and build it with makepkg (which installs via pacman,

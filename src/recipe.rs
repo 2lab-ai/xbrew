@@ -1,7 +1,12 @@
+use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
 use crate::util;
+
+/// The whole recipes/ directory, embedded at compile time. Drop a new
+/// `<name>.toml` in there and it ships automatically — no source edit.
+static BUILTIN_RECIPES: Dir = include_dir!("$CARGO_MANIFEST_DIR/recipes");
 
 /// An "arch-cask": how to install something that isn't a plain brew/pacman package.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -47,22 +52,18 @@ pub struct MacSpec {
     pub app: Option<String>,
 }
 
-/// Recipes compiled into the binary. User recipes in ~/.nobrew/recipes/*.toml override these.
-const BUILTINS: &[&str] = &[
-    include_str!("../recipes/brew.toml"),
-    include_str!("../recipes/claude.toml"),
-    include_str!("../recipes/claude-code.toml"),
-    include_str!("../recipes/nomachine.toml"),
-    include_str!("../recipes/rustdesk.toml"),
-    include_str!("../recipes/slack.toml"),
-    include_str!("../recipes/sunshine.toml"),
-];
-
+/// Every `recipes/*.toml` (embedded) plus user recipes in
+/// `~/.nobrew/recipes/*.toml`, which override built-ins by name.
 pub fn registry() -> BTreeMap<String, Recipe> {
     let mut map = BTreeMap::new();
-    for src in BUILTINS {
-        if let Ok(r) = toml::from_str::<Recipe>(src) {
-            map.insert(r.name.clone(), r);
+    for file in BUILTIN_RECIPES.files() {
+        if file.path().extension().and_then(|s| s.to_str()) != Some("toml") {
+            continue;
+        }
+        if let Some(txt) = file.contents_utf8() {
+            if let Ok(r) = toml::from_str::<Recipe>(txt) {
+                map.insert(r.name.clone(), r);
+            }
         }
     }
     if let Ok(dir) = user_recipe_dir() {
