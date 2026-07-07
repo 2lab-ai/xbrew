@@ -1,0 +1,11 @@
+name = "sunshine"
+description = "Self-hosted game/desktop stream host for Moonlight"
+
+# On Arch: build the AUR package.
+[arch]
+aur = "sunshine"
+
+# On macOS: not in brew -> pull the official arm64 .dmg and drop the app in /Applications.
+[macos]
+dmg = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg"
+app = "Sunshine.app"

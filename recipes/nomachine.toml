@@ -1,0 +1,10 @@
+name = "nomachine"
+description = "NoMachine remote desktop (server + client)"
+
+# On Arch: not in brew or pacman -> build the AUR package with makepkg.
+[arch]
+aur = "nomachine"
+
+# On macOS: available as a Homebrew cask.
+[macos]
+cask = "nomachine"

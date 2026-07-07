@@ -1,0 +1,10 @@
+name = "rustdesk"
+description = "Open-source remote desktop"
+
+# On Arch: not in brew/pacman -> install the Flathub build.
+[arch]
+flatpak = "com.rustdesk.RustDesk"
+
+# On macOS: available as a Homebrew cask.
+[macos]
+cask = "rustdesk"
