@@ -8,10 +8,11 @@
 That's the whole idea. `xbrew install <thing>` — it figures out where the thing
 lives (brew? pacman? AUR? flatpak? a `.dmg`?), installs it, and **remembers what
 it used** so `xbrew uninstall <thing>` just works. You never think about a
-package manager again. Same two commands on **macOS and Arch Linux**.
+package manager again. Same commands on **macOS, Arch, Debian/Ubuntu, and
+RHEL/Amazon Linux**.
 
 ```sh
-xbrew install nomachine
+xbrew install nomachine telegram slack   # one or many
 xbrew uninstall nomachine
 xbrew list
 ```
@@ -30,7 +31,11 @@ Update later with `xbrew self-update`.
 | Platform | It tries, in order |
 |----------|--------------------|
 | **macOS** | Homebrew formula/cask → recipe (cask / `.dmg`) |
-| **Arch**  | recipe (AUR `makepkg` / Flatpak) → Homebrew → `pacman` → **any AUR package** (`makepkg`) |
+| **Arch**  | recipe → Homebrew → `pacman` → **any AUR package** (`makepkg`) |
+| **Debian/Ubuntu** | recipe → Homebrew → `apt` |
+| **RHEL/Amazon Linux** | recipe → Homebrew → `dnf`/`yum` |
+
+(See [docs/PLATFORMS.md](docs/PLATFORMS.md) for detection and per-platform recipe fields.)
 
 The first one that has your package wins, and the choice is written to
 `~/.xbrew/state.json`. **Already installed it by hand?** `xbrew install <name>`

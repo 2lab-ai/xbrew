@@ -25,7 +25,11 @@ pub fn install(name: &str) -> Result<()> {
     let record = match plat {
         Platform::MacOS => install_macos(name, recipe.as_ref())?,
         Platform::Arch => install_arch(name, recipe.as_ref())?,
-        Platform::Other => bail!("xbrew supports only macOS and Arch Linux"),
+        Platform::Debian => install_debian(name, recipe.as_ref())?,
+        Platform::Rhel => install_rhel(name, recipe.as_ref())?,
+        Platform::Other => {
+            bail!("xbrew supports macOS, Arch, Debian/Ubuntu, and RHEL/Amazon Linux")
+        }
     };
 
     state.packages.insert(name.to_string(), record.clone());
@@ -37,6 +41,46 @@ pub fn install(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Install several packages in one go; one failure doesn't stop the rest.
+pub fn install_many(names: &[String]) -> Result<()> {
+    if names.len() == 1 {
+        return install(&names[0]);
+    }
+    let mut failed = Vec::new();
+    for name in names {
+        println!("\n\x1b[1m── {name} ──\x1b[0m");
+        if let Err(e) = install(name) {
+            eprintln!("\x1b[31merror:\x1b[0m {e:#}");
+            failed.push(name.clone());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        bail!("failed to install: {}", failed.join(", "))
+    }
+}
+
+/// Uninstall several packages in one go; one failure doesn't stop the rest.
+pub fn uninstall_many(names: &[String]) -> Result<()> {
+    if names.len() == 1 {
+        return uninstall(&names[0]);
+    }
+    let mut failed = Vec::new();
+    for name in names {
+        println!("\n\x1b[1m── {name} ──\x1b[0m");
+        if let Err(e) = uninstall(name) {
+            eprintln!("\x1b[31merror:\x1b[0m {e:#}");
+            failed.push(name.clone());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        bail!("failed to uninstall: {}", failed.join(", "))
+    }
+}
+
 /// Arch: a curated recipe is authoritative when it declares an Arch/script
 /// backend (that's the whole point of curating it); only names with no such
 /// recipe fall back to the generic Homebrew -> pacman chain.
@@ -46,7 +90,7 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             if pacman_installed(pkg) {
                 report_adopted(name, pkg);
             } else {
-                util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", pkg])?;
+                util::run_priv("pacman", &["-S", "--needed", "--noconfirm", pkg])?;
             }
             return Ok(Record {
                 backend: "pacman".into(),
@@ -109,7 +153,7 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         if pacman_installed(name) {
             report_adopted(name, name);
         } else {
-            util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", name])?;
+            util::run_priv("pacman", &["-S", "--needed", "--noconfirm", name])?;
         }
         return Ok(Record {
             backend: "pacman".into(),
@@ -202,6 +246,122 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     bail!("Homebrew isn't installed and there's no recipe for '{name}'. Run `xbrew install brew` first.")
 }
 
+/// Debian/Ubuntu: recipe (apt/flatpak/script) authoritative, then Homebrew, then apt.
+fn install_debian(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
+    if let Some(r) = recipe {
+        if let Some(pkg) = &r.debian.apt {
+            if dpkg_installed(pkg) {
+                report_adopted(name, pkg);
+            } else {
+                util::run_priv("apt-get", &["install", "-y", pkg])?;
+            }
+            return Ok(Record {
+                backend: "apt".into(),
+                reference: pkg.clone(),
+                kind: None,
+                artifacts: vec![],
+            });
+        }
+        if let Some(fp) = &r.debian.flatpak {
+            return flatpak_install(name, fp);
+        }
+        if let Some(res) = recipe_script_install(name, r) {
+            return res;
+        }
+    }
+
+    if util::which("brew") {
+        if let Some(kind) = brew_provides(name) {
+            if brew_installed(name, &kind) {
+                report_adopted(name, name);
+            } else {
+                brew_install(name, &kind)?;
+            }
+            return Ok(Record {
+                backend: "brew".into(),
+                reference: name.into(),
+                kind: Some(kind),
+                artifacts: vec![],
+            });
+        }
+    }
+
+    if util::which("apt-get") && apt_provides(name) {
+        if dpkg_installed(name) {
+            report_adopted(name, name);
+        } else {
+            util::run_priv("apt-get", &["install", "-y", name])?;
+        }
+        return Ok(Record {
+            backend: "apt".into(),
+            reference: name.into(),
+            kind: None,
+            artifacts: vec![],
+        });
+    }
+
+    bail!("no backend can install '{name}' on Debian/Ubuntu (no recipe; not in brew or apt)")
+}
+
+/// RHEL/Amazon Linux/Fedora: recipe (dnf/flatpak/script) authoritative, then Homebrew, then dnf/yum.
+fn install_rhel(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
+    let pm = rhel_pm();
+
+    if let Some(r) = recipe {
+        if let Some(pkg) = &r.rhel.dnf {
+            if rpm_installed(pkg) {
+                report_adopted(name, pkg);
+            } else {
+                util::run_priv(pm, &["install", "-y", pkg])?;
+            }
+            return Ok(Record {
+                backend: "dnf".into(),
+                reference: pkg.clone(),
+                kind: None,
+                artifacts: vec![],
+            });
+        }
+        if let Some(fp) = &r.rhel.flatpak {
+            return flatpak_install(name, fp);
+        }
+        if let Some(res) = recipe_script_install(name, r) {
+            return res;
+        }
+    }
+
+    if util::which("brew") {
+        if let Some(kind) = brew_provides(name) {
+            if brew_installed(name, &kind) {
+                report_adopted(name, name);
+            } else {
+                brew_install(name, &kind)?;
+            }
+            return Ok(Record {
+                backend: "brew".into(),
+                reference: name.into(),
+                kind: Some(kind),
+                artifacts: vec![],
+            });
+        }
+    }
+
+    if util::which(pm) && dnf_provides(name, pm) {
+        if rpm_installed(name) {
+            report_adopted(name, name);
+        } else {
+            util::run_priv(pm, &["install", "-y", name])?;
+        }
+        return Ok(Record {
+            backend: "dnf".into(),
+            reference: name.into(),
+            kind: None,
+            artifacts: vec![],
+        });
+    }
+
+    bail!("no backend can install '{name}' on RHEL/Amazon Linux (no recipe; not in brew or {pm})")
+}
+
 // ---------------------------------------------------------------------------
 // uninstall
 // ---------------------------------------------------------------------------
@@ -221,7 +381,13 @@ pub fn uninstall(name: &str) -> Result<()> {
             }
         }
         "pacman" | "aur" => {
-            util::run("sudo", &["pacman", "-Rns", "--noconfirm", &rec.reference])?;
+            util::run_priv("pacman", &["-Rns", "--noconfirm", &rec.reference])?;
+        }
+        "apt" => {
+            util::run_priv("apt-get", &["remove", "-y", &rec.reference])?;
+        }
+        "dnf" => {
+            util::run_priv(rhel_pm(), &["remove", "-y", &rec.reference])?;
         }
         "flatpak" => {
             util::run("flatpak", &["uninstall", "-y", &rec.reference])?;
@@ -315,6 +481,49 @@ fn report_adopted(name: &str, reference: &str) {
     }
 }
 
+fn dpkg_installed(pkg: &str) -> bool {
+    util::probe("dpkg", &["-s", pkg])
+}
+
+fn rpm_installed(pkg: &str) -> bool {
+    util::probe("rpm", &["-q", pkg])
+}
+
+fn apt_provides(pkg: &str) -> bool {
+    util::probe("apt-cache", &["show", pkg])
+}
+
+fn dnf_provides(pkg: &str, pm: &str) -> bool {
+    util::probe(pm, &["info", pkg])
+}
+
+/// dnf on modern systems (Amazon Linux 2023, Fedora), yum on older ones (AL2).
+fn rhel_pm() -> &'static str {
+    if util::which("dnf") {
+        "dnf"
+    } else {
+        "yum"
+    }
+}
+
+/// Install (or adopt) a Flathub app id. Shared by every Linux family.
+fn flatpak_install(name: &str, app_id: &str) -> Result<Record> {
+    if !util::which("flatpak") {
+        bail!("this recipe needs flatpak — install it with your package manager first");
+    }
+    if flatpak_installed(app_id) {
+        report_adopted(name, app_id);
+    } else {
+        util::run("flatpak", &["install", "-y", "flathub", app_id])?;
+    }
+    Ok(Record {
+        backend: "flatpak".into(),
+        reference: app_id.into(),
+        kind: None,
+        artifacts: vec![],
+    })
+}
+
 /// Last resort: run a recipe's own installer script (brew, claude, …).
 /// Returns None when the recipe defines no script.
 fn recipe_script_install(name: &str, r: &Recipe) -> Option<Result<Record>> {
@@ -341,7 +550,10 @@ fn aur_exists(pkg: &str) -> bool {
         return false;
     }
     let url = format!("https://aur.archlinux.org/{pkg}.git");
-    util::probe("git", &["ls-remote", &url])
+    // The AUR git server returns exit 0 even for a non-existent package (it hands
+    // back an empty repo you could push a new package to), so a zero exit isn't
+    // enough — require at least one ref.
+    !util::capture("git", &["ls-remote", &url]).trim().is_empty()
 }
 
 /// Clone the AUR package and build it with makepkg (which installs via pacman,
@@ -433,11 +645,30 @@ pub fn info(name: &str) -> Result<()> {
             println!("recipe:  yes");
             match plat {
                 Platform::Arch => {
+                    if let Some(p) = r.arch.pacman {
+                        println!("  arch → pacman: {p}");
+                    }
                     if let Some(a) = r.arch.aur {
                         println!("  arch → AUR: {a}");
                     }
                     if let Some(f) = r.arch.flatpak {
                         println!("  arch → flatpak: {f}");
+                    }
+                }
+                Platform::Debian => {
+                    if let Some(a) = r.debian.apt {
+                        println!("  debian → apt: {a}");
+                    }
+                    if let Some(f) = r.debian.flatpak {
+                        println!("  debian → flatpak: {f}");
+                    }
+                }
+                Platform::Rhel => {
+                    if let Some(d) = r.rhel.dnf {
+                        println!("  rhel → dnf: {d}");
+                    }
+                    if let Some(f) = r.rhel.flatpak {
+                        println!("  rhel → flatpak: {f}");
                     }
                 }
                 Platform::MacOS => {
@@ -454,7 +685,7 @@ pub fn info(name: &str) -> Result<()> {
                 println!("  self-install: {s}");
             }
         }
-        None => println!("recipe:  none (would try brew, then pacman)"),
+        None => println!("recipe:  none (would try brew, then the system package manager)"),
     }
     Ok(())
 }
@@ -473,9 +704,20 @@ pub fn search(query: &str) -> Result<()> {
         println!("== brew ==");
         let _ = util::run("brew", &["search", query]);
     }
-    if platform::detect() == Platform::Arch && util::which("pacman") {
-        println!("== pacman ==");
-        let _ = util::run("pacman", &["-Ss", query]);
+    match platform::detect() {
+        Platform::Arch if util::which("pacman") => {
+            println!("== pacman ==");
+            let _ = util::run("pacman", &["-Ss", query]);
+        }
+        Platform::Debian if util::which("apt-cache") => {
+            println!("== apt ==");
+            let _ = util::run("apt-cache", &["search", query]);
+        }
+        Platform::Rhel if util::which(rhel_pm()) => {
+            println!("== {} ==", rhel_pm());
+            let _ = util::run(rhel_pm(), &["search", query]);
+        }
+        _ => {}
     }
     Ok(())
 }

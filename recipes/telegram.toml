@@ -5,6 +5,10 @@ description = "Telegram Desktop"
 [arch]
 pacman = "telegram-desktop"
 
+# Debian/Ubuntu: apt package (in universe).
+[debian]
+apt = "telegram-desktop"
+
 # macOS: Homebrew cask.
 [macos]
 cask = "telegram"

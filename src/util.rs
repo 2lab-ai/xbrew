@@ -65,3 +65,32 @@ pub fn probe(program: &str, args: &[&str]) -> bool {
         .map(|s| s.success())
         .unwrap_or(false)
 }
+
+/// Run a command and capture its stdout (empty string on non-zero exit).
+pub fn capture(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Are we running as root? (containers, servers — then we skip `sudo`.)
+pub fn is_root() -> bool {
+    capture("id", &["-u"]).trim() == "0"
+}
+
+/// Run a privileged command: prefixed with `sudo` unless already root.
+pub fn run_priv(program: &str, args: &[&str]) -> Result<()> {
+    if is_root() {
+        run(program, args)
+    } else {
+        let mut full = Vec::with_capacity(args.len() + 1);
+        full.push(program);
+        full.extend_from_slice(args);
+        run("sudo", &full)
+    }
+}

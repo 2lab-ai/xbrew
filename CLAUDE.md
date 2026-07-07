@@ -29,13 +29,20 @@ build.rs        bakes XBREW_BUILD_ID into --version
 
 ## Backend resolution
 
+A curated **recipe is authoritative** (wins over a same-named native package).
+Otherwise, per platform:
+
 | Platform | Order |
 |----------|-------|
-| macOS    | brew formula/cask → recipe (cask / dmg) |
-| Arch     | brew (Linux) → pacman → recipe (AUR `makepkg` / flatpak) |
+| macOS    | recipe → brew formula/cask |
+| Arch     | recipe → brew → pacman → any AUR pkg (`makepkg`) |
+| Debian   | recipe → brew → apt |
+| RHEL     | recipe → brew → dnf/yum |
 
-First backend that can provide the package wins; the choice lands in
-`state.json` as `{ backend, reference, kind?, artifacts? }`.
+The choice lands in `state.json` as `{ backend, reference, kind?, artifacts? }`.
+Each backend adopts an already-installed package instead of reinstalling.
+Privileged commands go through `util::run_priv` (sudo unless root). See
+[docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Uninstall routing
 

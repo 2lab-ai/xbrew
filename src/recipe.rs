@@ -17,6 +17,10 @@ pub struct Recipe {
     #[serde(default)]
     pub arch: ArchSpec,
     #[serde(default)]
+    pub debian: DebianSpec,
+    #[serde(default)]
+    pub rhel: RhelSpec,
+    #[serde(default)]
     pub macos: MacSpec,
     /// Self-installing tools (brew, claude) that ship their own curl|bash
     /// installer — platform-independent, tried as a last resort.
@@ -40,6 +44,22 @@ pub struct ArchSpec {
     pub pacman: Option<String>,
     /// AUR package name -> git clone + makepkg -si
     pub aur: Option<String>,
+    /// Flathub app id -> flatpak install
+    pub flatpak: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct DebianSpec {
+    /// apt package name (Debian/Ubuntu)
+    pub apt: Option<String>,
+    /// Flathub app id -> flatpak install
+    pub flatpak: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct RhelSpec {
+    /// dnf/yum package name (Amazon Linux/Fedora/RHEL)
+    pub dnf: Option<String>,
     /// Flathub app id -> flatpak install
     pub flatpak: Option<String>,
 }

@@ -1,0 +1,66 @@
+name: Distro smoke
+
+# Validates the apt (Debian/Ubuntu) and dnf (RHEL/Amazon Linux) backends on
+# real distros — detection, adoption of a preinstalled package, and a real
+# install/uninstall cycle. Local dev is on Arch/macOS, so this is the gate for
+# the Linux package-manager paths.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: ubuntu (apt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke-ubuntu
+      - run: cargo build --release --locked
+      - name: smoke
+        run: |
+          set -euo pipefail
+          BIN=target/release/xbrew
+          "$BIN" --version
+          "$BIN" info telegram
+          # adopt a package that ships with the image (no network needed)
+          "$BIN" install coreutils
+          "$BIN" list
+          sudo apt-get update -qq
+          # real install + uninstall of a tiny package
+          "$BIN" install sl
+          "$BIN" uninstall sl
+
+  amazonlinux:
+    name: amazonlinux 2023 (dnf)
+    runs-on: ubuntu-latest
+    container: amazonlinux:2023
+    timeout-minutes: 25
+    steps:
+      - name: Install build deps
+        run: dnf install -y git tar gzip gcc rust cargo
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo build --release --locked
+      - name: smoke
+        run: |
+          set -euo pipefail
+          BIN=target/release/xbrew
+          "$BIN" --version
+          "$BIN" info telegram
+          # running as root in the container -> run_priv skips sudo
+          "$BIN" install bash        # preinstalled -> adoption path
+          "$BIN" list
+          "$BIN" install tree        # real dnf install
+          "$BIN" uninstall tree

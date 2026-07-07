@@ -26,10 +26,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Install a package (auto-selects brew / pacman / recipe)
-    Install { name: String },
-    /// Uninstall a package (routes to whatever backend installed it)
-    Uninstall { name: String },
+    /// Install one or more packages (auto-selects the right backend)
+    Install {
+        #[arg(required = true, num_args = 1..)]
+        names: Vec<String>,
+    },
+    /// Uninstall one or more packages (routes to whatever installed them)
+    Uninstall {
+        #[arg(required = true, num_args = 1..)]
+        names: Vec<String>,
+    },
     /// List packages xbrew has installed
     List,
     /// Show a package and how it would be installed here
@@ -43,8 +49,8 @@ enum Cmd {
 fn main() {
     let cli = Cli::parse();
     let res = match cli.cmd {
-        Cmd::Install { name } => resolve::install(&name),
-        Cmd::Uninstall { name } => resolve::uninstall(&name),
+        Cmd::Install { names } => resolve::install_many(&names),
+        Cmd::Uninstall { names } => resolve::uninstall_many(&names),
         Cmd::List => resolve::list(),
         Cmd::Info { name } => resolve::info(&name),
         Cmd::Search { query } => resolve::search(&query),
