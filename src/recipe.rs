@@ -51,6 +51,7 @@ pub struct MacSpec {
 const BUILTINS: &[&str] = &[
     include_str!("../recipes/brew.toml"),
     include_str!("../recipes/claude.toml"),
+    include_str!("../recipes/claude-code.toml"),
     include_str!("../recipes/nomachine.toml"),
     include_str!("../recipes/rustdesk.toml"),
     include_str!("../recipes/slack.toml"),

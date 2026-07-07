@@ -1,6 +1,6 @@
 [package]
 name = "nobrew"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "One install/uninstall over brew, pacman, and recipes (macOS + Arch)."
 license = "MIT"

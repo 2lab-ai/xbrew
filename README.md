@@ -50,8 +50,11 @@ nobrew self-update
 
 ## Recipes ("arch-cask")
 
-Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. Built-ins:
-`nomachine`, `rustdesk`, `slack`, `sunshine`. Add your own in `~/.nobrew/recipes/*.toml`:
+Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. A recipe is
+**authoritative** — if one exists for a name, nobrew installs it that way instead
+of guessing from a same-named brew/pacman package. Built-ins: `brew`, `claude`,
+`claude-code`, `nomachine`, `rustdesk`, `slack`, `sunshine`. Add your own in
+`~/.nobrew/recipes/*.toml`:
 
 ```toml
 name = "nomachine"

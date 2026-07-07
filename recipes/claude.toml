@@ -1,7 +1,6 @@
 name = "claude"
-description = "Claude Code CLI (self-installing)"
+description = "Claude — Anthropic's desktop app (not the CLI; see claude-code)"
 
-# Claude Code ships its own curl|bash installer.
-[script]
-provides_bin = "claude"
-install = "curl -fsSL https://claude.ai/install.sh | bash"
+# The desktop app is a macOS-only Homebrew cask. There is no Linux build.
+[macos]
+cask = "claude"

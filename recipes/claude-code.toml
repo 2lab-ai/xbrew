@@ -1,0 +1,11 @@
+name = "claude-code"
+description = "Claude Code — terminal AI coding assistant (binary: claude)"
+
+# macOS: managed Homebrew cask (its binary is `claude`).
+[macos]
+cask = "claude-code"
+
+# Linux (and any no-brew host): the official self-installer.
+[script]
+provides_bin = "claude"
+install = "curl -fsSL https://claude.ai/install.sh | bash"

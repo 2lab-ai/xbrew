@@ -39,30 +39,10 @@ pub fn install(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Arch order: Homebrew (ordinary CLIs) -> pacman -> recipe (AUR/flatpak).
+/// Arch: a curated recipe is authoritative when it declares an Arch/script
+/// backend (that's the whole point of curating it); only names with no such
+/// recipe fall back to the generic Homebrew -> pacman chain.
 fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
-    if util::which("brew") {
-        if let Some(kind) = brew_provides(name) {
-            brew_install(name, &kind)?;
-            return Ok(Record {
-                backend: "brew".into(),
-                reference: name.into(),
-                kind: Some(kind),
-                artifacts: vec![],
-            });
-        }
-    }
-
-    if util::which("pacman") && pacman_provides(name) {
-        util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", name])?;
-        return Ok(Record {
-            backend: "pacman".into(),
-            reference: name.into(),
-            kind: None,
-            artifacts: vec![],
-        });
-    }
-
     if let Some(r) = recipe {
         if let Some(aur) = &r.arch.aur {
             aur_install(aur)?;
@@ -90,14 +70,7 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         }
     }
 
-    bail!("no backend can install '{name}' on Arch (not in brew or pacman, and no recipe with an Arch/script source)")
-}
-
-/// macOS order: brew formula/cask -> recipe (cask override / dmg).
-fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
-    let has_brew = util::which("brew");
-
-    if has_brew {
+    if util::which("brew") {
         if let Some(kind) = brew_provides(name) {
             brew_install(name, &kind)?;
             return Ok(Record {
@@ -108,6 +81,24 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             });
         }
     }
+
+    if util::which("pacman") && pacman_provides(name) {
+        util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", name])?;
+        return Ok(Record {
+            backend: "pacman".into(),
+            reference: name.into(),
+            kind: None,
+            artifacts: vec![],
+        });
+    }
+
+    bail!("no backend can install '{name}' on Arch (no recipe, and not in brew or pacman)")
+}
+
+/// macOS: a curated recipe is authoritative when it declares a macOS/script
+/// backend; only names with no such recipe fall back to generic Homebrew.
+fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
+    let has_brew = util::which("brew");
 
     if let Some(r) = recipe {
         if let Some(cask) = &r.macos.cask {
@@ -139,9 +130,20 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         }
     }
 
-    bail!(
-        "no backend can install '{name}' on macOS (not in brew, and no recipe with a macOS/script source)"
-    )
+    if has_brew {
+        if let Some(kind) = brew_provides(name) {
+            brew_install(name, &kind)?;
+            return Ok(Record {
+                backend: "brew".into(),
+                reference: name.into(),
+                kind: Some(kind),
+                artifacts: vec![],
+            });
+        }
+        bail!("no backend can install '{name}' on macOS (no recipe, and not in brew)");
+    }
+
+    bail!("Homebrew isn't installed and there's no recipe for '{name}'. Run `nobrew install brew` first.")
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +209,9 @@ pub fn self_update() -> Result<()> {
 fn brew_provides(name: &str) -> Option<String> {
     if util::probe("brew", &["info", "--formula", name]) {
         Some("formula".into())
-    } else if util::probe("brew", &["info", "--cask", name]) {
+    } else if cfg!(target_os = "macos") && util::probe("brew", &["info", "--cask", name]) {
+        // Casks are macOS-only; on Linux `brew info --cask` still succeeds for a
+        // mac-only cask, but installing it fails ("requires macOS").
         Some("cask".into())
     } else {
         None
