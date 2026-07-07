@@ -39,7 +39,11 @@ pub fn run(program: &str, args: &[&str]) -> Result<()> {
 
 /// Same as `run`, but from a working directory.
 pub fn run_in(dir: &Path, program: &str, args: &[&str]) -> Result<()> {
-    eprintln!("\x1b[2m$ (cd {}) {program} {}\x1b[0m", dir.display(), args.join(" "));
+    eprintln!(
+        "\x1b[2m$ (cd {}) {program} {}\x1b[0m",
+        dir.display(),
+        args.join(" ")
+    );
     let status = Command::new(program)
         .args(args)
         .current_dir(dir)

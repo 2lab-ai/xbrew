@@ -1,0 +1,10 @@
+name = "slack"
+description = "Slack desktop client"
+
+# On Arch: build the AUR package.
+[arch]
+aur = "slack-desktop"
+
+# On macOS: available as a Homebrew cask.
+[macos]
+cask = "slack"

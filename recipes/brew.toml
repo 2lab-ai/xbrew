@@ -1,0 +1,8 @@
+name = "brew"
+description = "Homebrew — the package manager itself (self-installing)"
+
+# brew installs itself via its own script; no package manager can provide it.
+[script]
+provides_bin = "brew"
+install = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+uninstall = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"'

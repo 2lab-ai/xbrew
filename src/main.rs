@@ -6,10 +6,17 @@ mod util;
 
 use clap::{Parser, Subcommand};
 
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (build ",
+    env!("NOBREW_BUILD_ID"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "nobrew",
-    version,
+    version = VERSION,
     about = "One install/uninstall over brew, pacman, and recipes (macOS + Arch)."
 )]
 struct Cli {
@@ -29,6 +36,8 @@ enum Cmd {
     Info { name: String },
     /// Search brew, pacman, and recipes
     Search { query: String },
+    /// Update nobrew itself to the latest build
+    SelfUpdate,
 }
 
 fn main() {
@@ -39,6 +48,7 @@ fn main() {
         Cmd::List => resolve::list(),
         Cmd::Info { name } => resolve::info(&name),
         Cmd::Search { query } => resolve::search(&query),
+        Cmd::SelfUpdate => resolve::self_update(),
     };
     if let Err(e) = res {
         eprintln!("\x1b[31merror:\x1b[0m {e:#}");

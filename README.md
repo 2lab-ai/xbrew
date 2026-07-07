@@ -1,25 +1,20 @@
 # nobrew
 
-One `install` / `uninstall` across **macOS and Arch Linux** — you don't remember
-which package manager did what, nobrew does.
+> 나는 패키지 매니저를 기억하기 싫다.
+> 리눅스에서도 brew처럼 설치하고 삭제하겠다.
+> 팩맨이고 뭐고 몰라. 묻지 마.
+> 그냥 `nobrew install nomachine` 할 거야. **알아서 해줘.**
+
+That's the whole idea. `nobrew install <thing>` — it figures out where the thing
+lives (brew? pacman? AUR? flatpak? a `.dmg`?), installs it, and **remembers what
+it used** so `nobrew uninstall <thing>` just works. You never think about a
+package manager again. Same two commands on **macOS and Arch Linux**.
 
 ```sh
-nobrew install nomachine      # picks brew / pacman / AUR / flatpak / dmg for you
-nobrew uninstall nomachine    # removes it via whatever backend installed it
-nobrew list                   # what nobrew installed, and how
+nobrew install nomachine
+nobrew uninstall nomachine
+nobrew list
 ```
-
-Think of it as an **"arch-cask"**: Homebrew's one-liner UX, but it also drives
-`pacman`, builds AUR packages with `makepkg`, installs Flatpaks, and drops macOS
-`.dmg` apps into `/Applications` — behind a single command.
-
-## Why
-
-Installing the same tool is different on every system: some things are in
-`pacman`, some only in the AUR (which needs a helper), some are Flatpak-only,
-some ship as a `.dmg`. nobrew hides that. It **remembers the backend it used**
-for each package in `~/.nobrew/state.json`, so uninstall always knows the right
-remover.
 
 ## Install
 
@@ -27,30 +22,36 @@ remover.
 curl -fsSL https://raw.githubusercontent.com/2lab-ai/nobrew/HEAD/install.sh | bash
 ```
 
-(Local build: `cargo build --release`, binary at `target/release/nobrew`.)
+Prebuilt binary, no toolchain needed. Bleeding edge: append `NOBREW_CHANNEL=preview`.
+Update later with `nobrew self-update`.
 
-## How it resolves a package
+## What it actually does
 
-| Platform | Order |
-|----------|-------|
-| **macOS** | Homebrew formula/cask → recipe (cask override or `.dmg`) |
-| **Arch**  | Homebrew (Linux) → `pacman` → recipe (`makepkg`/AUR or Flatpak) |
+| Platform | It tries, in order |
+|----------|--------------------|
+| **macOS** | Homebrew formula/cask → recipe (cask / `.dmg`) |
+| **Arch**  | Homebrew → `pacman` → recipe (AUR via `makepkg` / Flatpak) |
 
-The first backend that can provide the package wins, and the choice is recorded.
+The first one that has your package wins, and the choice is written to
+`~/.nobrew/state.json`. Uninstall reads that and calls the right remover
+(`brew uninstall`, `pacman -Rns`, `flatpak uninstall`, or deletes the `.app`) —
+so **you** don't have to remember which one installed it.
 
-## Uninstall routing
+## Commands
 
-| Installed via | `nobrew uninstall` runs |
-|---------------|-------------------------|
-| brew          | `brew uninstall [--cask]` |
-| pacman / AUR  | `sudo pacman -Rns` |
-| flatpak       | `flatpak uninstall` |
-| dmg recipe    | `rm -rf /Applications/<App>.app` |
+```
+nobrew install <name>
+nobrew uninstall <name>
+nobrew list            # what you installed, and how
+nobrew info <name>
+nobrew search <query>
+nobrew self-update
+```
 
-## Recipes ("arch-casks")
+## Recipes ("arch-cask")
 
-Anything not in plain brew/pacman is a small TOML recipe. Built-ins live in
-`recipes/`; drop your own in `~/.nobrew/recipes/*.toml` (they override built-ins).
+Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. Built-ins:
+`nomachine`, `rustdesk`, `slack`, `sunshine`. Add your own in `~/.nobrew/recipes/*.toml`:
 
 ```toml
 name = "nomachine"
@@ -63,16 +64,7 @@ aur = "nomachine"          # or: flatpak = "org.example.App"
 cask = "nomachine"         # or: dmg = "https://.../App-arm64.dmg", app = "App.app"
 ```
 
-## Commands
+## Dev
 
-```
-nobrew install <name>
-nobrew uninstall <name>
-nobrew list
-nobrew info <name>
-nobrew search <query>
-```
-
-## Status
-
-Early MVP. Built-in recipes: `nomachine`, `rustdesk`, `sunshine`.
+`just check` (fmt + clippy + test) before every commit. See [CLAUDE.md](CLAUDE.md)
+for architecture and the release flow. MIT licensed.

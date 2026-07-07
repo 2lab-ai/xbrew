@@ -1,0 +1,7 @@
+name = "claude"
+description = "Claude Code CLI (self-installing)"
+
+# Claude Code ships its own curl|bash installer.
+[script]
+provides_bin = "claude"
+install = "curl -fsSL https://claude.ai/install.sh | bash"

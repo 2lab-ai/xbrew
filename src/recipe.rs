@@ -13,6 +13,20 @@ pub struct Recipe {
     pub arch: ArchSpec,
     #[serde(default)]
     pub macos: MacSpec,
+    /// Self-installing tools (brew, claude) that ship their own curl|bash
+    /// installer — platform-independent, tried as a last resort.
+    #[serde(default)]
+    pub script: ScriptSpec,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ScriptSpec {
+    /// shell command that installs the tool (run via `sh -c`)
+    pub install: Option<String>,
+    /// shell command that removes it (optional)
+    pub uninstall: Option<String>,
+    /// if this binary is already on PATH, treat as already installed
+    pub provides_bin: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -35,8 +49,11 @@ pub struct MacSpec {
 
 /// Recipes compiled into the binary. User recipes in ~/.nobrew/recipes/*.toml override these.
 const BUILTINS: &[&str] = &[
+    include_str!("../recipes/brew.toml"),
+    include_str!("../recipes/claude.toml"),
     include_str!("../recipes/nomachine.toml"),
     include_str!("../recipes/rustdesk.toml"),
+    include_str!("../recipes/slack.toml"),
     include_str!("../recipes/sunshine.toml"),
 ];
 
