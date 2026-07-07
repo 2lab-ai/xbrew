@@ -31,7 +31,7 @@ pub fn install(name: &str) -> Result<()> {
     state.packages.insert(name.to_string(), record.clone());
     state.save()?;
     println!(
-        "\n✓ installed '{name}' via {} — tracked by xbrew.",
+        "\n✓ '{name}' is set up via {} and tracked by xbrew.",
         record.backend
     );
     Ok(())
@@ -42,8 +42,25 @@ pub fn install(name: &str) -> Result<()> {
 /// recipe fall back to the generic Homebrew -> pacman chain.
 fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     if let Some(r) = recipe {
+        if let Some(pkg) = &r.arch.pacman {
+            if pacman_installed(pkg) {
+                report_adopted(name, pkg);
+            } else {
+                util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", pkg])?;
+            }
+            return Ok(Record {
+                backend: "pacman".into(),
+                reference: pkg.clone(),
+                kind: None,
+                artifacts: vec![],
+            });
+        }
         if let Some(aur) = &r.arch.aur {
-            aur_install(aur)?;
+            if pacman_installed(aur) {
+                report_adopted(name, aur);
+            } else {
+                aur_install(aur)?;
+            }
             return Ok(Record {
                 backend: "aur".into(),
                 reference: aur.clone(),
@@ -55,7 +72,11 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             if !util::which("flatpak") {
                 bail!("this recipe needs flatpak — install it: sudo pacman -S flatpak");
             }
-            util::run("flatpak", &["install", "-y", "flathub", fp])?;
+            if flatpak_installed(fp) {
+                report_adopted(name, fp);
+            } else {
+                util::run("flatpak", &["install", "-y", "flathub", fp])?;
+            }
             return Ok(Record {
                 backend: "flatpak".into(),
                 reference: fp.clone(),
@@ -70,7 +91,11 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
 
     if util::which("brew") {
         if let Some(kind) = brew_provides(name) {
-            brew_install(name, &kind)?;
+            if brew_installed(name, &kind) {
+                report_adopted(name, name);
+            } else {
+                brew_install(name, &kind)?;
+            }
             return Ok(Record {
                 backend: "brew".into(),
                 reference: name.into(),
@@ -81,7 +106,11 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     }
 
     if util::which("pacman") && pacman_provides(name) {
-        util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", name])?;
+        if pacman_installed(name) {
+            report_adopted(name, name);
+        } else {
+            util::run("sudo", &["pacman", "-S", "--needed", "--noconfirm", name])?;
+        }
         return Ok(Record {
             backend: "pacman".into(),
             reference: name.into(),
@@ -93,7 +122,11 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     // Generic AUR fallback: any package that exists in the AUR gets the same
     // git-clone + makepkg -si you'd do by hand — no recipe required.
     if aur_exists(name) {
-        aur_install(name)?;
+        if pacman_installed(name) {
+            report_adopted(name, name);
+        } else {
+            aur_install(name)?;
+        }
         return Ok(Record {
             backend: "aur".into(),
             reference: name.into(),
@@ -115,7 +148,11 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             if !has_brew {
                 bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `xbrew install brew` first.");
             }
-            brew_install(cask, "cask")?;
+            if brew_installed(cask, "cask") {
+                report_adopted(name, cask);
+            } else {
+                brew_install(cask, "cask")?;
+            }
             return Ok(Record {
                 backend: "brew".into(),
                 reference: cask.clone(),
@@ -127,12 +164,17 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             let app = r.macos.app.clone().ok_or_else(|| {
                 anyhow!("recipe '{name}' has a dmg but no `app` name for uninstall")
             })?;
-            let path = dmg_install(dmg, &app)?;
+            let dest = format!("/Applications/{app}");
+            if std::path::Path::new(&dest).exists() {
+                report_adopted(name, &app);
+            } else {
+                dmg_install(dmg, &app)?;
+            }
             return Ok(Record {
                 backend: "recipe-dmg".into(),
                 reference: app,
                 kind: None,
-                artifacts: vec![path],
+                artifacts: vec![dest],
             });
         }
         if let Some(res) = recipe_script_install(name, r) {
@@ -142,7 +184,11 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
 
     if has_brew {
         if let Some(kind) = brew_provides(name) {
-            brew_install(name, &kind)?;
+            if brew_installed(name, &kind) {
+                report_adopted(name, name);
+            } else {
+                brew_install(name, &kind)?;
+            }
             return Ok(Record {
                 backend: "brew".into(),
                 reference: name.into(),
@@ -238,6 +284,35 @@ fn brew_install(name: &str, kind: &str) -> Result<()> {
 
 fn pacman_provides(name: &str) -> bool {
     util::probe("pacman", &["-Si", name])
+}
+
+// --- "is it already installed?" probes, so we adopt instead of reinstalling ---
+
+fn pacman_installed(pkg: &str) -> bool {
+    util::probe("pacman", &["-Qq", pkg])
+}
+
+fn brew_installed(name: &str, kind: &str) -> bool {
+    let flag = if kind == "cask" {
+        "--cask"
+    } else {
+        "--formula"
+    };
+    util::probe("brew", &["list", flag, name])
+}
+
+fn flatpak_installed(app_id: &str) -> bool {
+    util::probe("flatpak", &["info", app_id])
+}
+
+/// Print an "already installed → adopting" line (with the underlying package
+/// name when it differs from what the user typed).
+fn report_adopted(name: &str, reference: &str) {
+    if name == reference {
+        println!("✓ '{name}' is already installed — adopting into xbrew.");
+    } else {
+        println!("✓ '{name}' is already installed ({reference}) — adopting into xbrew.");
+    }
 }
 
 /// Last resort: run a recipe's own installer script (brew, claude, …).

@@ -1,9 +1,9 @@
 name = "telegram"
 description = "Telegram Desktop"
 
-# Arch: prebuilt AUR package via makepkg (matches how it was installed).
+# Arch: the official repo package (its name differs from the friendly "telegram").
 [arch]
-aur = "telegram-desktop-bin"
+pacman = "telegram-desktop"
 
 # macOS: Homebrew cask.
 [macos]

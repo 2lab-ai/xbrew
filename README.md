@@ -33,7 +33,8 @@ Update later with `xbrew self-update`.
 | **Arch**  | recipe (AUR `makepkg` / Flatpak) → Homebrew → `pacman` → **any AUR package** (`makepkg`) |
 
 The first one that has your package wins, and the choice is written to
-`~/.xbrew/state.json`. Uninstall reads that and calls the right remover
+`~/.xbrew/state.json`. **Already installed it by hand?** `xbrew install <name>`
+detects that and just adopts it into tracking — no rebuild, no reinstall. Uninstall reads that and calls the right remover
 (`brew uninstall`, `pacman -Rns`, `flatpak uninstall`, or deletes the `.app`) —
 so **you** don't have to remember which one installed it.
 
@@ -62,7 +63,7 @@ name = "nomachine"
 description = "NoMachine remote desktop"
 
 [arch]
-aur = "nomachine"          # or: flatpak = "org.example.App"
+aur = "nomachine"          # or: pacman = "telegram-desktop", flatpak = "org.example.App"
 
 [macos]
 cask = "nomachine"         # or: dmg = "https://.../App-arm64.dmg", app = "App.app"

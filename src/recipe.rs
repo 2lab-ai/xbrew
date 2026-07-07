@@ -36,6 +36,8 @@ pub struct ScriptSpec {
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ArchSpec {
+    /// Official repo package name (maps a friendly name -> the real pkg), via pacman
+    pub pacman: Option<String>,
     /// AUR package name -> git clone + makepkg -si
     pub aur: Option<String>,
     /// Flathub app id -> flatpak install
