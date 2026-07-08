@@ -1,0 +1,15 @@
+name = "codex"
+description = "OpenAI Codex CLI — the coding agent that runs in your terminal"
+
+# Authoritative recipe: without it, the generic AUR fallback resolves the bare
+# name "codex" to an unrelated Electron note-taking app (jcv8000/Codex, which
+# pulls electron12/electron32 and fails to build). Pin the real OpenAI CLI.
+
+[arch]
+# Prebuilt official-release binary (no build deps); `openai-codex` builds from
+# source via cargo if you prefer that.
+aur = "openai-codex-bin"
+
+[macos]
+# Homebrew ships the OpenAI Codex CLI as a cask.
+cask = "codex"
