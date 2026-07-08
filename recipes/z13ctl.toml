@@ -1,0 +1,9 @@
+name = "z13ctl"
+description = "ASUS ROG Flow Z13 (GZ302) hardware control — RGB, power profiles, TDP, fan curves"
+
+# ASUS Strix Halo hardware controller. Prebuilt AUR binary (no build deps);
+# xbrew installs it with makepkg --noconfirm, so no interactive cleanBuild/diff
+# prompts. Linux/ASUS-only — no macOS backend.
+
+[arch]
+aur = "z13ctl-bin"
