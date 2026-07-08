@@ -48,10 +48,32 @@ so **you** don't have to remember which one installed it.
 ```
 xbrew install <name>
 xbrew uninstall <name>
-xbrew list            # what you installed, and how
+xbrew list                       # what you installed, and how
+xbrew bundle <manifest.yaml>...  # install a whole manifest (Brewfile-style)
+xbrew version <name>             # installed version of a tracked package
 xbrew info <name>
 xbrew search <query>
 xbrew self-update
+```
+
+### Bundles
+
+`xbrew bundle` installs everything declared in one or more YAML manifests —
+merged in order (e.g. a common file + a per-OS file), duplicates collapsed. It
+registers `trust:` taps first (so brew-backed formulae resolve), installs each
+`xbrew:` entry, and verifies optional version constraints.
+
+```yaml
+trust:
+  - 2lab-ai/tap
+xbrew:
+  - brew                     # no constraint = latest
+  - claude-code >= 2.1.204   # verified after install; also == > <= <
+  - telegram >= 6.9.3
+```
+
+```sh
+xbrew bundle software.yaml software.arch.yaml
 ```
 
 ## Recipes ("arch-cask")

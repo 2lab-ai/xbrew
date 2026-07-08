@@ -21,7 +21,9 @@ src/
   platform.rs   macOS vs Arch detection
   state.rs      ~/.xbrew/state.json — package -> backend record (drives uninstall)
   recipe.rs     "arch-cask" TOML recipes (built-in + ~/.xbrew/recipes/*.toml)
-  resolve.rs    install/uninstall orchestration + backend helpers
+  resolve.rs    install/uninstall/bundle orchestration + backend helpers
+  manifest.rs   YAML-subset parser for `xbrew bundle` manifests (dependency-free)
+  version.rs    installed-version resolution (backend-aware) + constraint checks
   util.rs       command runners, which, paths
 recipes/        built-in recipes, whole dir embedded via include_dir
 build.rs        bakes XBREW_BUILD_ID into --version

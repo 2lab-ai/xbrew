@@ -1,10 +1,13 @@
+mod manifest;
 mod platform;
 mod recipe;
 mod resolve;
 mod state;
 mod util;
+mod version;
 
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -38,6 +41,14 @@ enum Cmd {
     },
     /// List packages xbrew has installed
     List,
+    /// Install everything in one or more YAML manifests (Brewfile-style),
+    /// honoring `trust:` taps and `name >= x` version constraints
+    Bundle {
+        #[arg(required = true, num_args = 1..)]
+        files: Vec<PathBuf>,
+    },
+    /// Print the installed version of a tracked package
+    Version { name: String },
     /// Show a package and how it would be installed here
     Info { name: String },
     /// Search brew, pacman, and recipes
@@ -52,6 +63,8 @@ fn main() {
         Cmd::Install { names } => resolve::install_many(&names),
         Cmd::Uninstall { names } => resolve::uninstall_many(&names),
         Cmd::List => resolve::list(),
+        Cmd::Bundle { files } => resolve::bundle(&files),
+        Cmd::Version { name } => resolve::version(&name),
         Cmd::Info { name } => resolve::info(&name),
         Cmd::Search { query } => resolve::search(&query),
         Cmd::SelfUpdate => resolve::self_update(),

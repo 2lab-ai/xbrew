@@ -1,9 +1,12 @@
 use anyhow::{anyhow, bail, Result};
+use std::path::PathBuf;
 
+use crate::manifest;
 use crate::platform::{self, Platform};
 use crate::recipe::{self, Recipe};
 use crate::state::{Record, State};
 use crate::util;
+use crate::version;
 
 // ---------------------------------------------------------------------------
 // install
@@ -410,6 +413,113 @@ pub fn uninstall(name: &str) -> Result<()> {
     state.save()?;
     println!("\n✓ uninstalled '{name}'.");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// bundle — install a whole manifest (Brewfile-style), with version constraints
+// ---------------------------------------------------------------------------
+
+/// Install everything declared across one or more manifests. Manifests are
+/// merged in order (common first, then per-OS); trusted taps are registered
+/// before installing so brew-backed formulae resolve. One failure doesn't stop
+/// the rest; a version constraint that isn't met is reported as a failure.
+pub fn bundle(files: &[PathBuf]) -> Result<()> {
+    if files.is_empty() {
+        bail!("bundle: give at least one manifest file");
+    }
+
+    let mut trust: Vec<String> = Vec::new();
+    let mut entries: Vec<manifest::Entry> = Vec::new();
+    for f in files {
+        let m = manifest::parse_file(f)?;
+        for t in m.trust {
+            if !trust.contains(&t) {
+                trust.push(t);
+            }
+        }
+        for e in m.entries {
+            if !entries.iter().any(|x| x.name == e.name) {
+                entries.push(e);
+            }
+        }
+    }
+
+    // Register trusted taps first — brew itself is just another xbrew package.
+    if !trust.is_empty() {
+        if !util::which("brew") {
+            println!("\n\x1b[1m── ensuring Homebrew (needed for trusted taps) ──\x1b[0m");
+            install("brew")?;
+        }
+        for t in &trust {
+            println!("trust tap: {t}");
+            if let Err(e) = util::run("brew", &["tap", t]) {
+                eprintln!("\x1b[33m! brew tap {t} failed: {e:#}\x1b[0m");
+            }
+        }
+    }
+
+    let mut ok: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for e in &entries {
+        println!("\n\x1b[1m── {} ──\x1b[0m", e.name);
+        if let Err(err) = install(&e.name) {
+            eprintln!("\x1b[31merror:\x1b[0m {err:#}");
+            failed.push(format!("{} (install failed)", e.name));
+            continue;
+        }
+        match (e.op.as_deref(), e.version.as_deref()) {
+            (Some(op), Some(req)) => match version::installed(&e.name) {
+                Some(cur) if version::satisfies(&cur, op, req) => {
+                    ok.push(format!("{} {cur} (need {op} {req} ✓)", e.name));
+                }
+                Some(cur) => {
+                    println!(
+                        "\x1b[33m! {} {cur} does not satisfy {op} {req}\x1b[0m",
+                        e.name
+                    );
+                    failed.push(format!("{} {cur} (need {op} {req})", e.name));
+                }
+                None => {
+                    println!(
+                        "\x1b[33m! {} installed but version unreadable (wanted {op} {req})\x1b[0m",
+                        e.name
+                    );
+                    ok.push(format!("{} (version unverified)", e.name));
+                }
+            },
+            _ => {
+                let cur = version::installed(&e.name).unwrap_or_default();
+                ok.push(if cur.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{} {cur}", e.name)
+                });
+            }
+        }
+    }
+
+    println!("\n\x1b[1mbundle summary\x1b[0m");
+    for o in &ok {
+        println!("  \x1b[32m✓\x1b[0m {o}");
+    }
+    for f in &failed {
+        println!("  \x1b[31m✗ {f}\x1b[0m");
+    }
+    if !failed.is_empty() {
+        bail!("{} package(s) failed or unsatisfied", failed.len());
+    }
+    Ok(())
+}
+
+/// Print the installed version of a tracked package (backend-aware).
+pub fn version(name: &str) -> Result<()> {
+    match version::installed(name) {
+        Some(v) => {
+            println!("{v}");
+            Ok(())
+        }
+        None => bail!("could not determine the installed version of '{name}'"),
+    }
 }
 
 /// Re-run the published installer to pull the latest xbrew binary.
