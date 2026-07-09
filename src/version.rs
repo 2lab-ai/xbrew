@@ -41,7 +41,7 @@ pub fn installed(name: &str) -> Option<String> {
             (!out.is_empty()).then(|| out.to_string())
         }
         "flatpak" => {
-            let out = util::capture("flatpak", &["info", &reference]);
+            let out = util::capture("env", &["LC_ALL=C", "flatpak", "info", &reference]);
             out.lines()
                 .find(|l| l.to_ascii_lowercase().contains("version"))
                 .and_then(extract)
@@ -121,6 +121,61 @@ fn clean_pkg_version(v: &str) -> String {
     let v = v.split_once(':').map(|(_, r)| r).unwrap_or(v);
     let v = v.rsplit_once('-').map(|(l, _)| l).unwrap_or(v);
     v.to_string()
+}
+
+/// Best-effort "latest available version" for a tracked package, per the backend
+/// xbrew recorded. Returns None when the backend has no queryable registry
+/// (script/self-managed) or the query fails/offline.
+pub fn latest_available(name: &str) -> Option<String> {
+    let state = State::load().ok()?;
+    let rec = state.packages.get(name)?;
+    let reference = rec.reference.clone();
+    match rec.backend.as_str() {
+        "brew" => {
+            let is_cask = rec.kind.as_deref() == Some("cask");
+            let flag = if is_cask { "--cask" } else { "--formula" };
+            let out = util::capture("brew", &["info", "--json=v2", flag, &reference]);
+            let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+            let raw = if is_cask {
+                v["casks"][0]["version"].as_str()?
+            } else {
+                v["formulae"][0]["versions"]["stable"].as_str()?
+            };
+            // Casks can carry a ",build" suffix, e.g. "150.0.4078,abc123".
+            Some(raw.split(',').next().unwrap_or(raw).to_string())
+        }
+        "pacman" => {
+            // Force C locale — field labels ("Version") are otherwise localized.
+            let out = util::capture("env", &["LC_ALL=C", "pacman", "-Si", &reference]);
+            out.lines()
+                .find(|l| l.trim_start().starts_with("Version"))
+                .and_then(|l| l.split(':').nth(1))
+                .map(|s| clean_pkg_version(s.trim()))
+        }
+        "aur" => {
+            let url = format!("https://aur.archlinux.org/rpc/v5/info?arg[]={reference}");
+            let out = util::capture("curl", &["-fsSL", &url]);
+            let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+            v["results"][0]["Version"].as_str().map(clean_pkg_version)
+        }
+        "flatpak" => {
+            let out = util::capture(
+                "env",
+                &[
+                    "LC_ALL=C",
+                    "flatpak",
+                    "remote-info",
+                    "--cached",
+                    "flathub",
+                    &reference,
+                ],
+            );
+            out.lines()
+                .find(|l| l.to_ascii_lowercase().contains("version"))
+                .and_then(extract)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

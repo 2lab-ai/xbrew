@@ -522,6 +522,163 @@ pub fn version(name: &str) -> Result<()> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// update — show installed vs latest for tracked packages, upgrade on y/n/all
+// ---------------------------------------------------------------------------
+
+struct UpdateRow {
+    name: String,
+    backend: String,
+    installed: String,
+    latest: String,
+    outdated: bool,
+}
+
+/// Check tracked packages (all, or the named ones) for newer versions and,
+/// for each that is behind, prompt y / n / a(ll) / q(uit) to upgrade it.
+pub fn update(names: &[String]) -> Result<()> {
+    let state = State::load()?;
+    if state.packages.is_empty() {
+        println!("nothing installed by xbrew yet. Try: xbrew install <name>");
+        return Ok(());
+    }
+
+    let targets: Vec<String> = if names.is_empty() {
+        state.packages.keys().cloned().collect()
+    } else {
+        for n in names {
+            if !state.packages.contains_key(n) {
+                bail!("'{n}' is not tracked by xbrew — see `xbrew list`");
+            }
+        }
+        names.to_vec()
+    };
+
+    println!("checking {} package(s) for updates…\n", targets.len());
+
+    let mut rows: Vec<UpdateRow> = Vec::new();
+    for name in &targets {
+        let installed = version::installed(name).unwrap_or_default();
+        let latest = version::latest_available(name);
+        let outdated = match (&latest, installed.is_empty()) {
+            (Some(l), false) => version::compare(l, &installed) == std::cmp::Ordering::Greater,
+            _ => false,
+        };
+        rows.push(UpdateRow {
+            name: name.clone(),
+            backend: state.packages[name].backend.clone(),
+            installed: if installed.is_empty() {
+                "?".into()
+            } else {
+                installed
+            },
+            latest: latest.unwrap_or_else(|| "?".into()),
+            outdated,
+        });
+    }
+
+    println!(
+        "{:<22} {:<9} {:<15} {:<15} STATUS",
+        "PACKAGE", "BACKEND", "INSTALLED", "LATEST"
+    );
+    for r in &rows {
+        let mark = if r.outdated {
+            "\x1b[33mupdate\x1b[0m"
+        } else if r.latest == "?" {
+            "\x1b[2m?\x1b[0m"
+        } else {
+            "\x1b[32mok\x1b[0m"
+        };
+        println!(
+            "{:<22} {:<9} {:<15} {:<15} {mark}",
+            r.name, r.backend, r.installed, r.latest
+        );
+    }
+
+    let outdated: Vec<&UpdateRow> = rows.iter().filter(|r| r.outdated).collect();
+    if outdated.is_empty() {
+        println!("\n\x1b[32m✓\x1b[0m everything up to date.");
+        return Ok(());
+    }
+    println!("\n{} update(s) available.", outdated.len());
+
+    let mut all = false;
+    let mut updated = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+    for r in &outdated {
+        if !all {
+            match ask_char(&format!(
+                "update {} {} → {}? [y/N/a=all/q=quit] ",
+                r.name, r.installed, r.latest
+            ))? {
+                'y' => {}
+                'a' => all = true,
+                'q' => break,
+                _ => {
+                    println!("  skipped {}", r.name);
+                    continue;
+                }
+            }
+        }
+        println!("\n\x1b[1m── updating {} ──\x1b[0m", r.name);
+        match upgrade(&r.name) {
+            Ok(()) => updated += 1,
+            Err(e) => {
+                eprintln!("\x1b[31merror:\x1b[0m {e:#}");
+                failed.push(r.name.clone());
+            }
+        }
+    }
+
+    println!("\n{updated} updated.");
+    if !failed.is_empty() {
+        bail!("failed to update: {}", failed.join(", "));
+    }
+    Ok(())
+}
+
+/// Upgrade one tracked package via whatever backend installed it.
+fn upgrade(name: &str) -> Result<()> {
+    let state = State::load()?;
+    let rec = state
+        .packages
+        .get(name)
+        .ok_or_else(|| anyhow!("'{name}' is not tracked by xbrew"))?;
+    match rec.backend.as_str() {
+        "brew" => {
+            if rec.kind.as_deref() == Some("cask") {
+                util::run("brew", &["upgrade", "--cask", &rec.reference])
+            } else {
+                util::run("brew", &["upgrade", &rec.reference])
+            }
+        }
+        "pacman" => {
+            eprintln!(
+                "note: upgrading one Arch package — a full `sudo pacman -Syu` is the supported path."
+            );
+            util::run_priv("pacman", &["-S", "--noconfirm", &rec.reference])
+        }
+        "aur" => aur_install(&rec.reference), // git pull + makepkg -si rebuilds latest
+        "flatpak" => util::run("flatpak", &["update", "-y", &rec.reference]),
+        other => bail!("don't know how to update backend '{other}' — update it with its own tool"),
+    }
+}
+
+/// Read a single y/n/a/q answer from the terminal (defaults to 'n' on empty).
+fn ask_char(prompt: &str) -> Result<char> {
+    use std::io::Write;
+    print!("{prompt}");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line
+        .trim()
+        .chars()
+        .next()
+        .unwrap_or('n')
+        .to_ascii_lowercase())
+}
+
 /// Re-run the published installer to pull the latest xbrew binary.
 pub fn self_update() -> Result<()> {
     println!("updating xbrew (fetching the latest install.sh)…");

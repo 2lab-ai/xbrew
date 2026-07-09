@@ -51,6 +51,7 @@ xbrew uninstall <name>
 xbrew list                       # what you installed, and how
 xbrew bundle <manifest.yaml>...  # install a whole manifest (Brewfile-style)
 xbrew version <name>             # installed version of a tracked package
+xbrew update [name...]           # installed vs latest for tracked pkgs; upgrade (y/n/all)
 xbrew info <name>
 xbrew search <query>
 xbrew self-update

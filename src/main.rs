@@ -49,6 +49,11 @@ enum Cmd {
     },
     /// Print the installed version of a tracked package
     Version { name: String },
+    /// Check installed vs latest for tracked packages and update them (y/n/all)
+    Update {
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
+    },
     /// Show a package and how it would be installed here
     Info { name: String },
     /// Search brew, pacman, and recipes
@@ -65,6 +70,7 @@ fn main() {
         Cmd::List => resolve::list(),
         Cmd::Bundle { files } => resolve::bundle(&files),
         Cmd::Version { name } => resolve::version(&name),
+        Cmd::Update { names } => resolve::update(&names),
         Cmd::Info { name } => resolve::info(&name),
         Cmd::Search { query } => resolve::search(&query),
         Cmd::SelfUpdate => resolve::self_update(),
