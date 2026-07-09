@@ -25,6 +25,28 @@ pub fn install(name: &str) -> Result<()> {
     let plat = platform::detect();
     let recipe = recipe::get(name);
 
+    // If the recipe names a binary and it's already on PATH (installed by any
+    // means — e.g. the tool's own installer), adopt it instead of reinstalling
+    // through a package backend. Keeps a self-installed `claude` from being
+    // re-fetched as a brew cask, etc.
+    if let Some(bin) = recipe
+        .as_ref()
+        .and_then(|r| r.script.provides_bin.as_deref())
+    {
+        if util::which(bin) {
+            println!("✓ '{name}' already present ({bin} on PATH) — adopting into xbrew.");
+            let record = Record {
+                backend: "script".into(),
+                reference: name.into(),
+                kind: None,
+                artifacts: vec![],
+            };
+            state.packages.insert(name.to_string(), record);
+            state.save()?;
+            return Ok(());
+        }
+    }
+
     let record = match plat {
         Platform::MacOS => install_macos(name, recipe.as_ref())?,
         Platform::Arch => install_arch(name, recipe.as_ref())?,

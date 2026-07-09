@@ -1,0 +1,13 @@
+name = "orca"
+description = "Orca — the ADE for working with a fleet of parallel coding agents (Stably)"
+
+# Authoritative recipe: on Arch the bare name "orca" is the GNOME screen reader
+# in the official repos — not this. Pin Stably's Orca (https://onorca.dev).
+
+[arch]
+# Prebuilt AUR binary (uses system electron); source: stablyai/orca releases.
+aur = "orca-ide-bin"
+
+[macos]
+# Cask from Stably's own tap; the fully-qualified token auto-taps on install.
+cask = "stablyai/orca/orca"
