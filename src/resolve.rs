@@ -111,6 +111,13 @@ pub fn uninstall_many(names: &[String]) -> Result<()> {
 /// recipe fall back to the generic Homebrew -> pacman chain.
 fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     if let Some(r) = recipe {
+        // Extra repo packages the backend won't pull on its own (e.g. a build
+        // tool an AUR PKGBUILD uses but forgets to declare as makedepends).
+        if !r.arch.deps.is_empty() {
+            let mut args = vec!["-S", "--needed", "--noconfirm"];
+            args.extend(r.arch.deps.iter().map(String::as_str));
+            util::run_priv("pacman", &args)?;
+        }
         if let Some(pkg) = &r.arch.pacman {
             if pacman_installed(pkg) {
                 report_adopted(name, pkg);

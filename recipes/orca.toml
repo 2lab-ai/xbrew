@@ -7,6 +7,10 @@ description = "Orca — the ADE for working with a fleet of parallel coding agen
 [arch]
 # Prebuilt AUR binary (uses system electron); source: stablyai/orca releases.
 aur = "orca-ide-bin"
+# The orca-ide-bin PKGBUILD calls `asar` in prepare() but forgets to declare it
+# as a makedepend, so makepkg -s doesn't install it and the build fails. asar is
+# a plain extra-repo package — install it first.
+deps = ["asar"]
 
 [macos]
 # Cask from Stably's own tap; the fully-qualified token auto-taps on install.

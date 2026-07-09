@@ -46,6 +46,10 @@ pub struct ArchSpec {
     pub aur: Option<String>,
     /// Flathub app id -> flatpak install
     pub flatpak: Option<String>,
+    /// Extra official-repo packages to install first (e.g. a build tool an AUR
+    /// PKGBUILD uses but forgets to declare as makedepends).
+    #[serde(default)]
+    pub deps: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
