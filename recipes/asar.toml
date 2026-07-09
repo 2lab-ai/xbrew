@@ -1,0 +1,10 @@
+name = "asar"
+description = "@electron/asar — Electron archive tool (extract/pack app.asar)"
+
+# Name collision: Homebrew's `asar` (v1.x) is a SNES assembler — a completely
+# different tool. Without this recipe xbrew's brew-first resolution installs that
+# one, which breaks Electron builds (e.g. orca-ide-bin) that call `asar e/p`.
+# On Arch the real Electron asar is extra/asar (v4.x) — pin it.
+
+[arch]
+pacman = "asar"
