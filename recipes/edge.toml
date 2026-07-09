@@ -1,0 +1,13 @@
+name = "edge"
+description = "Microsoft Edge — Chromium-based web browser"
+
+# Authoritative recipe: without it the generic AUR fallback resolves the bare
+# name "edge" to an unrelated, long-dead Chromium fork ("edge" 88.0.673.0) whose
+# download 404s. Pin the real Microsoft Edge.
+
+[arch]
+# Prebuilt stable binary from Microsoft's repo (packaged for Arch via AUR).
+aur = "microsoft-edge-stable-bin"
+
+[macos]
+cask = "microsoft-edge"
