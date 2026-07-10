@@ -83,6 +83,27 @@ pub fn is_root() -> bool {
     capture("id", &["-u"]).trim() == "0"
 }
 
+/// Prime sudo now and keep its timestamp fresh in the background, so a sequence
+/// of long privileged steps (e.g. several AUR rebuilds in `xbrew update`) doesn't
+/// hit a stale-password timeout partway through. No-op when already root.
+/// Best-effort: if the initial prompt fails, we just don't start the keep-alive.
+pub fn keep_sudo_alive() {
+    if is_root() {
+        return;
+    }
+    if run("sudo", &["-v"]).is_err() {
+        return;
+    }
+    // Detached refresher: `sudo -n -v` never prompts; it extends the timestamp
+    // while it's still valid and fails (ending the loop) once it lapses.
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        if !probe("sudo", &["-n", "-v"]) {
+            break;
+        }
+    });
+}
+
 /// Run a privileged command: prefixed with `sudo` unless already root.
 pub fn run_priv(program: &str, args: &[&str]) -> Result<()> {
     if is_root() {

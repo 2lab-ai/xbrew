@@ -632,6 +632,7 @@ pub fn update(names: &[String]) -> Result<()> {
     println!("\n{} update(s) available.", outdated.len());
 
     let mut all = false;
+    let mut sudo_primed = false;
     let mut updated = 0usize;
     let mut failed: Vec<String> = Vec::new();
     for r in &outdated {
@@ -648,6 +649,13 @@ pub fn update(names: &[String]) -> Result<()> {
                     continue;
                 }
             }
+        }
+        // Prime + keep sudo alive before the first privileged upgrade, so a
+        // sequence of long AUR/pacman rebuilds doesn't hit a stale-password
+        // timeout on a later `pacman -U`.
+        if !sudo_primed && matches!(r.backend.as_str(), "pacman" | "aur" | "dnf" | "apt") {
+            util::keep_sudo_alive();
+            sudo_primed = true;
         }
         println!("\n\x1b[1m── updating {} ──\x1b[0m", r.name);
         match upgrade(&r.name) {
