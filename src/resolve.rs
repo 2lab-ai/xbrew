@@ -760,7 +760,13 @@ fn brew_installed(name: &str, kind: &str) -> bool {
     } else {
         "--formula"
     };
-    util::probe("brew", &["list", flag, name])
+    // Check the *version output*, not the exit code: after `brew uninstall
+    // --cask`, a leftover empty Caskroom dir can make `brew list --cask <name>`
+    // still exit 0, which would make xbrew wrongly "adopt" a missing package.
+    // `--versions` prints "<name> <ver>" only when actually installed.
+    !util::capture("brew", &["list", flag, "--versions", name])
+        .trim()
+        .is_empty()
 }
 
 fn flatpak_installed(app_id: &str) -> bool {
