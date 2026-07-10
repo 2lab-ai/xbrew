@@ -867,7 +867,15 @@ fn aur_install(pkg: &str) -> Result<()> {
         let url = format!("https://aur.archlinux.org/{pkg}.git");
         util::run("git", &["clone", &url, dir.to_str().unwrap()])?;
     }
-    util::run_in(&dir, "makepkg", &["-si", "--needed", "--noconfirm"])?;
+    // Build with system /usr/bin ahead of everything else on PATH. AUR PKGBUILDs
+    // expect Arch tools; a linuxbrew (or other) shim of the same name — e.g. a
+    // Homebrew `asar` (a SNES assembler) shadowing extra/asar (the Electron tool)
+    // — otherwise silently gets used and breaks prepare()/build().
+    let cmd = format!(
+        "cd '{}' && PATH=\"/usr/bin:/usr/local/bin:$PATH\" makepkg -si --needed --noconfirm",
+        dir.display()
+    );
+    util::run("sh", &["-c", &cmd])?;
     Ok(())
 }
 
