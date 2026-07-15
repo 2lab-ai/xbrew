@@ -144,6 +144,20 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
                 artifacts: vec![],
             });
         }
+        if let Some(url) = &r.arch.pkgbuild {
+            let (dir, pkg) = pkgbuild_spec(name, r)?;
+            if pacman_installed(pkg) {
+                report_adopted(name, pkg);
+            } else {
+                pkgbuild_install(url, dir, pkg)?;
+            }
+            return Ok(Record {
+                backend: "pkgbuild".into(),
+                reference: pkg.into(),
+                kind: None,
+                artifacts: vec![],
+            });
+        }
         if let Some(fp) = &r.arch.flatpak {
             if !util::which("flatpak") {
                 bail!("this recipe needs flatpak — install it: sudo pacman -S flatpak");
@@ -412,7 +426,8 @@ pub fn uninstall(name: &str) -> Result<()> {
                 util::run("brew", &["uninstall", &rec.reference])?;
             }
         }
-        "pacman" | "aur" => {
+        // pkgbuild builds register in the pacman DB exactly like AUR ones.
+        "pacman" | "aur" | "pkgbuild" => {
             util::run_priv("pacman", &["-Rns", "--noconfirm", &rec.reference])?;
         }
         "apt" => {
@@ -572,6 +587,7 @@ pub fn update(names: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    let explicit = !names.is_empty();
     let targets: Vec<String> = if names.is_empty() {
         state.packages.keys().cloned().collect()
     } else {
@@ -589,19 +605,24 @@ pub fn update(names: &[String]) -> Result<()> {
     for name in &targets {
         let installed = version::installed(name).unwrap_or_default();
         let latest = version::latest_available(name);
+        let backend = state.packages[name].backend.clone();
+        let vcs = backend == "pkgbuild";
         let outdated = match (&latest, installed.is_empty()) {
             (Some(l), false) => version::compare(l, &installed) == std::cmp::Ordering::Greater,
-            _ => false,
+            // A VCS PKGBUILD tracks upstream HEAD — there is no published version
+            // to compare against, and settling it costs a full rebuild. So don't
+            // churn on a bare `xbrew update`; rebuild only when asked by name.
+            _ => vcs && explicit,
         };
         rows.push(UpdateRow {
             name: name.clone(),
-            backend: state.packages[name].backend.clone(),
+            backend,
             installed: if installed.is_empty() {
                 "?".into()
             } else {
                 installed
             },
-            latest: latest.unwrap_or_else(|| "?".into()),
+            latest: latest.unwrap_or_else(|| if vcs { "HEAD".into() } else { "?".into() }),
             outdated,
         });
     }
@@ -613,6 +634,10 @@ pub fn update(names: &[String]) -> Result<()> {
     for r in &rows {
         let mark = if r.outdated {
             "\x1b[33mupdate\x1b[0m"
+        } else if r.backend == "pkgbuild" {
+            // Whether HEAD moved can't be known without building it, so don't
+            // claim "ok" — `xbrew update <name>` forces the rebuild.
+            "\x1b[2mgit\x1b[0m"
         } else if r.latest == "?" {
             "\x1b[2m?\x1b[0m"
         } else {
@@ -653,7 +678,12 @@ pub fn update(names: &[String]) -> Result<()> {
         // Prime + keep sudo alive before the first privileged upgrade, so a
         // sequence of long AUR/pacman rebuilds doesn't hit a stale-password
         // timeout on a later `pacman -U`.
-        if !sudo_primed && matches!(r.backend.as_str(), "pacman" | "aur" | "dnf" | "apt") {
+        if !sudo_primed
+            && matches!(
+                r.backend.as_str(),
+                "pacman" | "aur" | "pkgbuild" | "dnf" | "apt"
+            )
+        {
             util::keep_sudo_alive();
             sudo_primed = true;
         }
@@ -696,6 +726,20 @@ fn upgrade(name: &str) -> Result<()> {
             util::run_priv("pacman", &["-S", "--noconfirm", &rec.reference])
         }
         "aur" => aur_install(&rec.reference), // git pull + makepkg -si rebuilds latest
+        // A VCS PKGBUILD has no published release to move to — rebuilding it
+        // against the current upstream HEAD *is* the update.
+        "pkgbuild" => {
+            let r = recipe::get(name).ok_or_else(|| {
+                anyhow!("'{name}' was built from a PKGBUILD but no recipe declares it any more")
+            })?;
+            let url = r
+                .arch
+                .pkgbuild
+                .clone()
+                .ok_or_else(|| anyhow!("recipe '{name}' no longer declares a pkgbuild"))?;
+            let (dir, pkg) = pkgbuild_spec(name, &r)?;
+            pkgbuild_install(&url, dir, pkg)
+        }
         "flatpak" => util::run("flatpak", &["update", "-y", &rec.reference]),
         other => bail!("don't know how to update backend '{other}' — update it with its own tool"),
     }
@@ -893,6 +937,51 @@ fn aur_install(pkg: &str) -> Result<()> {
     Ok(())
 }
 
+/// The `dir` + `pkg` an `arch.pkgbuild` recipe needs; both are mandatory, since
+/// without them there is nothing to build and nothing to uninstall later.
+fn pkgbuild_spec<'a>(name: &str, r: &'a Recipe) -> Result<(&'a str, &'a str)> {
+    let dir =
+        r.arch.dir.as_deref().ok_or_else(|| {
+            anyhow!("recipe '{name}' has a pkgbuild but no `dir` to build it from")
+        })?;
+    let pkg =
+        r.arch.pkg.as_deref().ok_or_else(|| {
+            anyhow!("recipe '{name}' has a pkgbuild but no `pkg` name for uninstall")
+        })?;
+    Ok((dir, pkg))
+}
+
+/// Build a PKGBUILD that lives in an upstream git repo rather than the AUR.
+/// Identical to `aur_install` past the clone URL: makepkg installs through
+/// pacman, so `pacman -Rns` removes it cleanly and `pacman -Q` reports it.
+fn pkgbuild_install(url: &str, dir: &str, pkg: &str) -> Result<()> {
+    if !util::which("makepkg") {
+        bail!("makepkg not found — install base-devel: sudo pacman -S --needed base-devel git");
+    }
+    let cache = util::xbrew_dir()?.join("pkgbuild");
+    std::fs::create_dir_all(&cache)?;
+    let repo = cache.join(pkg);
+    if repo.join(".git").exists() {
+        util::run_in(&repo, "git", &["pull", "--ff-only"])?;
+    } else {
+        // Shallow: only the PKGBUILD is read here. Any source the PKGBUILD
+        // fetches is its own clone, under makepkg's control.
+        util::run("git", &["clone", "--depth=1", url, repo.to_str().unwrap()])?;
+    }
+    let build = repo.join(dir);
+    if !build.join("PKGBUILD").exists() {
+        bail!("no PKGBUILD at '{dir}' in {url}");
+    }
+    // Same /usr/bin-first PATH as aur_install: PKGBUILDs expect Arch tools, and
+    // a linuxbrew shim of the same name would otherwise shadow them.
+    let cmd = format!(
+        "cd '{}' && PATH=\"/usr/bin:/usr/local/bin:$PATH\" makepkg -si --needed --noconfirm",
+        build.display()
+    );
+    util::run("sh", &["-c", &cmd])?;
+    Ok(())
+}
+
 /// Download a .dmg, mount it (auto-accepting any license), copy the app into
 /// /Applications, strip quarantine, and detach. Returns the installed app path.
 fn dmg_install(url: &str, app: &str) -> Result<String> {
@@ -968,6 +1057,11 @@ pub fn info(name: &str) -> Result<()> {
                     }
                     if let Some(a) = r.arch.aur {
                         println!("  arch → AUR: {a}");
+                    }
+                    if let Some(p) = r.arch.pkgbuild {
+                        let pkg = r.arch.pkg.as_deref().unwrap_or("?");
+                        let dir = r.arch.dir.as_deref().unwrap_or("?");
+                        println!("  arch → PKGBUILD: {pkg} (built from {p}, {dir})");
                     }
                     if let Some(f) = r.arch.flatpak {
                         println!("  arch → flatpak: {f}");

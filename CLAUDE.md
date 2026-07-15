@@ -48,9 +48,9 @@ Privileged commands go through `util::run_priv` (sudo unless root). See
 
 ## Uninstall routing
 
-`brew` → `brew uninstall [--cask]`; `pacman`/`aur` → `sudo pacman -Rns`
-(AUR builds register in the pacman DB, so this is clean); `flatpak` →
-`flatpak uninstall`; `recipe-dmg` → `rm -rf` the recorded `.app`.
+`brew` → `brew uninstall [--cask]`; `pacman`/`aur`/`pkgbuild` → `sudo pacman
+-Rns` (makepkg registers its builds in the pacman DB, so this is clean);
+`flatpak` → `flatpak uninstall`; `recipe-dmg` → `rm -rf` the recorded `.app`.
 
 ## Versioning & release (mirrors llmux)
 
@@ -79,7 +79,33 @@ Anything not in plain brew/pacman is a small TOML file in `recipes/`
 name = "nomachine"
 description = "..."
 [arch]
-aur = "nomachine"        # or flatpak = "app.id"
+aur = "nomachine"        # or pacman = "pkg" / flatpak = "app.id"
 [macos]
 cask = "nomachine"       # or dmg = "https://.../App-arm64.dmg" + app = "App.app"
 ```
+
+The file name must match `name` — it's the key users type, and a mismatch makes
+the recipe unreachable. `registry()` **skips a recipe that fails to parse**, so
+a typo would ship as a missing package rather than an error; the tests in
+`recipe.rs` parse every embedded recipe to catch that at build time.
+
+### `arch.pkgbuild` — upstreams that ship a PKGBUILD but never published it
+
+`aur = "x"` clones `aur.archlinux.org/x.git`. When the PKGBUILD only lives in
+the project's own repo, point at it directly:
+
+```toml
+[arch]
+pkgbuild = "https://github.com/2lab-ai/llmux.git"
+dir = "llmux-islands-linux/packaging/arch"   # where the PKGBUILD sits
+pkg = "llmux-islands-git"                    # the pkgname it produces
+```
+
+All three are required. The build is the same `makepkg -si` as `aur`, so it
+lands in the pacman DB and uninstall/`pacman -Q` route normally — it's recorded
+under its own `pkgbuild` backend only so `update` rebuilds from the right remote.
+
+These are typically VCS (`-git`) packages tracking upstream HEAD, which has no
+queryable "latest": `latest_available` returns None, `xbrew update` shows them
+as `git` rather than claiming `ok`, and a bare `xbrew update` won't churn on
+them. `xbrew update <name>` forces the rebuild.

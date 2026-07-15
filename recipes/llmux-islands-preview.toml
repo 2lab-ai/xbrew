@@ -1,0 +1,20 @@
+name = "llmux-islands-preview"
+description = "llmux islands, preview channel — bleeding-edge build of the llmux control surface"
+
+# Pair this with `llmux-preview` (the CLI): the macOS cask depends_on it, and on
+# Arch the PKGBUILD's optdepends points at the daemon it drives.
+
+[arch]
+# Same PKGBUILD, same pkgname as the stable recipe: Linux has exactly one
+# llmux-islands channel — a -git package tracking master — so on Arch
+# `llmux-islands` and `llmux-islands-preview` build the identical thing.
+# They're kept as two names so a Brewfile can stay platform-neutral, but only
+# install one: both would register the same pacman package, and uninstalling
+# either removes it out from under the other's xbrew record.
+pkgbuild = "https://github.com/2lab-ai/llmux.git"
+dir = "llmux-islands-linux/packaging/arch"
+pkg = "llmux-islands-git"
+
+[macos]
+# Preview cask from 2lab-ai's own tap; conflicts_with the stable cask.
+cask = "2lab-ai/tap/llmux-islands-preview"

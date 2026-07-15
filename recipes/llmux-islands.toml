@@ -1,0 +1,20 @@
+name = "llmux-islands"
+description = "llmux islands — account usage + subscription control surface for the llmux proxy"
+
+# Two different apps under one name, because upstream ships one per platform:
+# macOS gets a menu-bar app (prebuilt, from the tap); Arch gets a KDE control
+# surface built from source. Both talk to the same llmux daemon.
+
+[arch]
+# Not on the AUR — the PKGBUILD lives in the llmux repo, so build it from there.
+# It is a VCS package (pkgname ends in -git): it tracks master, which is what
+# upstream publishes for Linux. There is no tagged Linux build to pin to, so
+# this is preview-grade even under the stable name — see llmux-islands-preview.
+pkgbuild = "https://github.com/2lab-ai/llmux.git"
+dir = "llmux-islands-linux/packaging/arch"
+pkg = "llmux-islands-git"
+
+[macos]
+# Cask from 2lab-ai's own tap; the fully-qualified token auto-taps on install.
+# It depends_on the llmux formula, so brew pulls the CLI in too.
+cask = "2lab-ai/tap/llmux-islands"

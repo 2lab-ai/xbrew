@@ -20,7 +20,8 @@ pub fn installed(name: &str) -> Option<String> {
     };
 
     match backend.as_str() {
-        "pacman" | "aur" => {
+        // pkgbuild builds land in the pacman DB under their pkgname, same as AUR.
+        "pacman" | "aur" | "pkgbuild" => {
             // "telegram-desktop 6.9.3-7.1" -> "6.9.3"
             let out = util::capture("pacman", &["-Q", &reference]);
             out.split_whitespace().nth(1).map(clean_pkg_version)
@@ -125,7 +126,8 @@ fn clean_pkg_version(v: &str) -> String {
 
 /// Best-effort "latest available version" for a tracked package, per the backend
 /// xbrew recorded. Returns None when the backend has no queryable registry
-/// (script/self-managed) or the query fails/offline.
+/// (script/self-managed, or a `pkgbuild` recipe whose version is only settled by
+/// building upstream HEAD) or the query fails/offline.
 pub fn latest_available(name: &str) -> Option<String> {
     let state = State::load().ok()?;
     let rec = state.packages.get(name)?;

@@ -44,6 +44,15 @@ pub struct ArchSpec {
     pub pacman: Option<String>,
     /// AUR package name -> git clone + makepkg -si
     pub aur: Option<String>,
+    /// Git repo that carries its own PKGBUILD in-tree, for upstreams that ship
+    /// an Arch package but never published it to the AUR -> git clone + makepkg
+    /// -si, same as `aur` but from an arbitrary remote. Needs `dir` and `pkg`.
+    pub pkgbuild: Option<String>,
+    /// Path to the directory holding the PKGBUILD, relative to the repo root.
+    pub dir: Option<String>,
+    /// The `pkgname` the PKGBUILD produces. makepkg registers it in the pacman
+    /// DB under this name, so it is what uninstall/version query.
+    pub pkg: Option<String>,
     /// Flathub app id -> flatpak install
     pub flatpak: Option<String>,
     /// Extra official-repo packages to install first (e.g. a build tool an AUR
@@ -115,4 +124,83 @@ fn user_recipe_dir() -> anyhow::Result<std::path::PathBuf> {
 
 pub fn get(name: &str) -> Option<Recipe> {
     registry().remove(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every embedded recipe, parsed strictly. `registry()` drops a recipe that
+    /// fails to parse, so without this a typo would ship as a silently missing
+    /// package instead of a build error.
+    fn builtins() -> Vec<(String, Recipe)> {
+        BUILTIN_RECIPES
+            .files()
+            .filter(|f| f.path().extension().and_then(|s| s.to_str()) == Some("toml"))
+            .map(|f| {
+                let path = f.path().display().to_string();
+                let txt = f
+                    .contents_utf8()
+                    .unwrap_or_else(|| panic!("{path}: not utf-8"));
+                let r: Recipe =
+                    toml::from_str(txt).unwrap_or_else(|e| panic!("{path}: does not parse: {e}"));
+                (path, r)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn builtin_recipes_parse_and_are_named() {
+        let all = builtins();
+        assert!(!all.is_empty(), "no recipes embedded");
+        for (path, r) in &all {
+            assert!(!r.name.is_empty(), "{path}: empty name");
+            // The file name is the lookup key users type; a mismatch with the
+            // `name` field would make the recipe unreachable.
+            let stem = path.trim_end_matches(".toml");
+            assert_eq!(&r.name, stem, "{path}: name does not match file name");
+        }
+    }
+
+    #[test]
+    fn builtin_recipes_declare_a_backend() {
+        for (path, r) in builtins() {
+            let has_backend = r.arch.pacman.is_some()
+                || r.arch.aur.is_some()
+                || r.arch.pkgbuild.is_some()
+                || r.arch.flatpak.is_some()
+                || r.debian.apt.is_some()
+                || r.debian.flatpak.is_some()
+                || r.rhel.dnf.is_some()
+                || r.rhel.flatpak.is_some()
+                || r.macos.cask.is_some()
+                || r.macos.dmg.is_some()
+                || r.script.install.is_some();
+            assert!(has_backend, "{path}: no backend on any platform");
+        }
+    }
+
+    /// `pkgbuild` alone can't be acted on: `dir` says what to build and `pkg`
+    /// is the pacman name uninstall/version resolve against. Unknown TOML keys
+    /// are ignored silently, so a misspelled `pkg` would only surface here.
+    #[test]
+    fn pkgbuild_recipes_carry_dir_and_pkg() {
+        for (path, r) in builtins() {
+            if r.arch.pkgbuild.is_some() {
+                assert!(r.arch.dir.is_some(), "{path}: pkgbuild without `dir`");
+                assert!(r.arch.pkg.is_some(), "{path}: pkgbuild without `pkg`");
+            }
+        }
+    }
+
+    #[test]
+    fn llmux_islands_builds_from_the_upstream_repo() {
+        let r = get("llmux-islands").expect("llmux-islands recipe missing");
+        assert_eq!(r.arch.pkg.as_deref(), Some("llmux-islands-git"));
+        assert_eq!(
+            r.arch.dir.as_deref(),
+            Some("llmux-islands-linux/packaging/arch")
+        );
+        assert_eq!(r.macos.cask.as_deref(), Some("2lab-ai/tap/llmux-islands"));
+    }
 }
