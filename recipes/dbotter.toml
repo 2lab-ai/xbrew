@@ -1,0 +1,20 @@
+name = "dbotter"
+description = "dbotter Preview — local Rust database client"
+
+# Approved immutable Preview release:
+# source 5f887198112c46f308c50b6596610afb9720415b
+# manifest sha256 f5302654a20cffa51497aa1f504b44d80f721230099f27ce090df91d8e8cffce
+
+[arch.binary]
+name = "dbotter"
+
+[arch.binary.aarch64]
+url = "https://github.com/2lab-ai/dbotter/releases/download/preview-2026-07-20-095048-29731634437-1-5f887198112c/dbotter-preview-linux-aarch64"
+sha256 = "07f139a7d68f60159ed6a5c82807944aef69af6be6fb4248316bb67b581081a3"
+
+[arch.binary.x86_64]
+url = "https://github.com/2lab-ai/dbotter/releases/download/preview-2026-07-20-095048-29731634437-1-5f887198112c/dbotter-preview-linux-x86_64"
+sha256 = "e397963b0b7be6df0016f526d4f29db1662b948091503fdc6837d382d6101ed6"
+
+[macos]
+cask = "2lab-ai/tap/dbotter-preview"

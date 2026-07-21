@@ -1,9 +1,7 @@
 name: Distro smoke
 
-# Validates the apt (Debian/Ubuntu) and dnf (RHEL/Amazon Linux) backends on
-# real distros — detection, adoption of a preinstalled package, and a real
-# install/uninstall cycle. Local dev is on Arch/macOS, so this is the gate for
-# the Linux package-manager paths.
+# Validates verified binaries, apt, and dnf on real Linux distros — including
+# the public dbotter name on Arch and real install/uninstall cycles.
 
 on:
   workflow_dispatch:
@@ -14,6 +12,37 @@ permissions:
   contents: read
 
 jobs:
+  arch:
+    name: archlinux (verified binary)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 25
+    steps:
+      - name: Install build and assertion tools
+        run: pacman -Syu --disable-sandbox --noconfirm git rust cargo jq
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo build --release --locked
+      - name: Install dbotter Preview by its public xbrew name
+        run: |
+          set -euo pipefail
+          install -Dm755 target/release/xbrew /usr/local/bin/xbrew
+          export PATH="$HOME/.xbrew/bin:$PATH"
+          xbrew install dbotter
+          identity="$(dbotter version --format json)"
+          echo "$identity"
+          jq -e '
+            .package_version == "0.1.0"
+            and .channel == "preview"
+            and .source_sha == "5f887198112c46f308c50b6596610afb9720415b"
+            and .target == "x86_64-unknown-linux-gnu"
+            and .arch == "x86_64"
+          ' <<<"$identity"
+          xbrew list
+          xbrew uninstall dbotter
+          test ! -e "$HOME/.xbrew/bin/dbotter"
+
   ubuntu:
     name: ubuntu (apt)
     runs-on: ubuntu-latest

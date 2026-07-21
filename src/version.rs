@@ -47,6 +47,11 @@ pub fn installed(name: &str) -> Option<String> {
                 .find(|l| l.to_ascii_lowercase().contains("version"))
                 .and_then(extract)
         }
+        "recipe-binary" => {
+            let path = util::xbrew_dir().ok()?.join("bin").join(&reference);
+            let path = path.to_str()?;
+            extract(&util::capture(path, &["--version"]))
+        }
         _ => {
             // script backend / not tracked: ask the tool itself.
             let bin = recipe::get(name)

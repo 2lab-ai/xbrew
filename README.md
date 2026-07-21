@@ -26,6 +26,16 @@ curl -fsSL https://raw.githubusercontent.com/2lab-ai/xbrew/HEAD/install.sh | bas
 Prebuilt binary, no toolchain needed. Bleeding edge: append `XBREW_CHANNEL=preview`.
 Update later with `xbrew self-update`.
 
+Install the approved dbotter Preview on Arch Linux (aarch64 or x86_64):
+
+```sh
+xbrew install dbotter
+dbotter version --format json
+```
+
+xbrew downloads the immutable release asset, verifies its pinned SHA-256, and
+installs it at `~/.xbrew/bin/dbotter` without `sudo` or a source build.
+
 ## What it actually does
 
 | Platform | It tries, in order |
@@ -40,7 +50,8 @@ Update later with `xbrew self-update`.
 The first one that has your package wins, and the choice is written to
 `~/.xbrew/state.json`. **Already installed it by hand?** `xbrew install <name>`
 detects that and just adopts it into tracking — no rebuild, no reinstall. Uninstall reads that and calls the right remover
-(`brew uninstall`, `pacman -Rns`, `flatpak uninstall`, or deletes the `.app`) —
+(`brew uninstall`, `pacman -Rns`, `flatpak uninstall`, or removes the tracked
+app/binary artifact) —
 so **you** don't have to remember which one installed it.
 
 ## Commands
@@ -82,7 +93,7 @@ xbrew bundle software.yaml software.arch.yaml
 Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. A recipe is
 **authoritative** — if one exists for a name, xbrew installs it that way instead
 of guessing from a same-named brew/pacman package. Built-ins: `brew`, `claude`,
-`claude-code`, `nomachine`, `rustdesk`, `slack`, `sunshine`, `telegram` — and
+`claude-code`, `dbotter`, `nomachine`, `rustdesk`, `slack`, `sunshine`, `telegram` — and
 anything in the AUR works without a recipe at all. Add your own by dropping a
 file in `recipes/` (shipped) or `~/.xbrew/recipes/*.toml` (local):
 

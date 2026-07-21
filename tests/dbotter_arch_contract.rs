@@ -13,7 +13,6 @@ fn recipe() -> toml::Value {
 }
 
 #[test]
-#[ignore = "RED: implement the checksum-verified Arch binary recipe"]
 fn dbotter_pins_the_approved_preview_for_both_architectures() {
     let recipe = recipe();
     assert_eq!(recipe["name"].as_str(), Some("dbotter"));

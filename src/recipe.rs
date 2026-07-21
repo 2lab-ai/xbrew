@@ -55,10 +55,29 @@ pub struct ArchSpec {
     pub pkg: Option<String>,
     /// Flathub app id -> flatpak install
     pub flatpak: Option<String>,
+    /// A prebuilt executable downloaded by xbrew itself and pinned by SHA-256.
+    /// This is the Arch equivalent of a cask for upstreams that publish Linux
+    /// binaries but do not maintain a pacman package or AUR recipe.
+    pub binary: Option<BinarySpec>,
     /// Extra official-repo packages to install first (e.g. a build tool an AUR
     /// PKGBUILD uses but forgets to declare as makedepends).
     #[serde(default)]
     pub deps: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BinarySpec {
+    /// Executable name under ~/.xbrew/bin.
+    pub name: String,
+    /// Immutable artifact for each xbrew release architecture.
+    pub aarch64: BinaryArtifact,
+    pub x86_64: BinaryArtifact,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BinaryArtifact {
+    pub url: String,
+    pub sha256: String,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -169,6 +188,7 @@ mod tests {
                 || r.arch.aur.is_some()
                 || r.arch.pkgbuild.is_some()
                 || r.arch.flatpak.is_some()
+                || r.arch.binary.is_some()
                 || r.debian.apt.is_some()
                 || r.debian.flatpak.is_some()
                 || r.rhel.dnf.is_some()
@@ -189,6 +209,33 @@ mod tests {
             if r.arch.pkgbuild.is_some() {
                 assert!(r.arch.dir.is_some(), "{path}: pkgbuild without `dir`");
                 assert!(r.arch.pkg.is_some(), "{path}: pkgbuild without `pkg`");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_recipes_are_https_and_sha256_pinned() {
+        for (path, r) in builtins() {
+            let Some(binary) = r.arch.binary else {
+                continue;
+            };
+            assert!(
+                !binary.name.is_empty() && !binary.name.contains('/'),
+                "{path}: invalid binary name"
+            );
+            for artifact in [&binary.aarch64, &binary.x86_64] {
+                assert!(
+                    artifact.url.starts_with("https://"),
+                    "{path}: binary URL must use HTTPS"
+                );
+                assert_eq!(artifact.sha256.len(), 64, "{path}: invalid SHA-256 length");
+                assert!(
+                    artifact
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "{path}: SHA-256 must be lowercase hexadecimal"
+                );
             }
         }
     }

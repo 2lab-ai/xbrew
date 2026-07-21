@@ -9,7 +9,7 @@ use crate::util;
 /// `xbrew uninstall` can route to the right remover.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Record {
-    /// backend: brew | pacman | aur | flatpak | recipe-dmg
+    /// backend: brew | pacman | aur | flatpak | recipe-dmg | recipe-binary
     pub backend: String,
     /// what to hand back to that backend on uninstall
     /// (brew formula/cask, pacman/aur pkg name, flatpak app id, or .app path)

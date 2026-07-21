@@ -1,9 +1,10 @@
 use anyhow::{anyhow, bail, Result};
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use crate::manifest;
 use crate::platform::{self, Platform};
-use crate::recipe::{self, Recipe};
+use crate::recipe::{self, BinaryArtifact, BinarySpec, Recipe};
 use crate::state::{Record, State};
 use crate::util;
 use crate::version;
@@ -117,6 +118,9 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
             let mut args = vec!["-S", "--needed", "--noconfirm"];
             args.extend(r.arch.deps.iter().map(String::as_str));
             util::run_priv("pacman", &args)?;
+        }
+        if let Some(binary) = &r.arch.binary {
+            return install_arch_binary(name, binary);
         }
         if let Some(pkg) = &r.arch.pacman {
             if pacman_installed(pkg) {
@@ -444,6 +448,19 @@ pub fn uninstall(name: &str) -> Result<()> {
                 util::run("rm", &["-rf", a])?;
             }
         }
+        "recipe-binary" => {
+            let destination = binary_destination(&rec.reference)?;
+            if rec
+                .artifacts
+                .iter()
+                .any(|artifact| Path::new(artifact) != destination)
+            {
+                bail!("refusing to remove a recipe-binary artifact outside ~/.xbrew/bin");
+            }
+            if destination.exists() {
+                std::fs::remove_file(&destination)?;
+            }
+        }
         "script" => match recipe::get(name).and_then(|r| r.script.uninstall) {
             Some(cmd) => util::run("sh", &["-c", &cmd])?,
             None => println!(
@@ -607,12 +624,13 @@ pub fn update(names: &[String]) -> Result<()> {
         let latest = version::latest_available(name);
         let backend = state.packages[name].backend.clone();
         let vcs = backend == "pkgbuild";
+        let pinned_binary = backend == "recipe-binary";
         let outdated = match (&latest, installed.is_empty()) {
             (Some(l), false) => version::compare(l, &installed) == std::cmp::Ordering::Greater,
-            // A VCS PKGBUILD tracks upstream HEAD — there is no published version
-            // to compare against, and settling it costs a full rebuild. So don't
-            // churn on a bare `xbrew update`; rebuild only when asked by name.
-            _ => vcs && explicit,
+            // VCS packages and immutable binary recipes have no remote registry
+            // to query. Do not churn on a bare update; explicitly naming one
+            // rebuilds or revalidates it against the recipe shipped by xbrew.
+            _ => (vcs || pinned_binary) && explicit,
         };
         rows.push(UpdateRow {
             name: name.clone(),
@@ -622,7 +640,15 @@ pub fn update(names: &[String]) -> Result<()> {
             } else {
                 installed
             },
-            latest: latest.unwrap_or_else(|| if vcs { "HEAD".into() } else { "?".into() }),
+            latest: latest.unwrap_or_else(|| {
+                if vcs {
+                    "HEAD".into()
+                } else if pinned_binary {
+                    "recipe".into()
+                } else {
+                    "?".into()
+                }
+            }),
             outdated,
         });
     }
@@ -638,6 +664,8 @@ pub fn update(names: &[String]) -> Result<()> {
             // Whether HEAD moved can't be known without building it, so don't
             // claim "ok" — `xbrew update <name>` forces the rebuild.
             "\x1b[2mgit\x1b[0m"
+        } else if r.backend == "recipe-binary" && !r.outdated {
+            "\x1b[2mpinned\x1b[0m"
         } else if r.latest == "?" {
             "\x1b[2m?\x1b[0m"
         } else {
@@ -739,6 +767,16 @@ fn upgrade(name: &str) -> Result<()> {
                 .ok_or_else(|| anyhow!("recipe '{name}' no longer declares a pkgbuild"))?;
             let (dir, pkg) = pkgbuild_spec(name, &r)?;
             pkgbuild_install(&url, dir, pkg)
+        }
+        "recipe-binary" => {
+            let r = recipe::get(name).ok_or_else(|| {
+                anyhow!("'{name}' was installed from a binary but no recipe declares it any more")
+            })?;
+            let binary = r
+                .arch
+                .binary
+                .ok_or_else(|| anyhow!("recipe '{name}' no longer declares an Arch binary"))?;
+            install_arch_binary(name, &binary).map(|_| ())
         }
         "flatpak" => util::run("flatpak", &["update", "-y", &rec.reference]),
         other => bail!("don't know how to update backend '{other}' — update it with its own tool"),
@@ -982,6 +1020,143 @@ fn pkgbuild_install(url: &str, dir: &str, pkg: &str) -> Result<()> {
     Ok(())
 }
 
+fn install_arch_binary(recipe_name: &str, binary: &BinarySpec) -> Result<Record> {
+    let artifact = binary_asset_for_arch(binary, std::env::consts::ARCH)?;
+    validate_binary_artifact(binary, artifact)?;
+
+    let destination = binary_destination(&binary.name)?;
+    if destination.exists() && sha256_file(&destination)? == artifact.sha256 {
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))?;
+        report_adopted(recipe_name, destination.to_string_lossy().as_ref());
+        return Ok(binary_record(binary, destination));
+    }
+
+    let root = util::xbrew_dir()?;
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache)?;
+    let temporary = cache.join(format!(
+        ".{}-{}-{}.download",
+        recipe_name,
+        binary.name,
+        std::process::id()
+    ));
+    let temporary_text = temporary
+        .to_str()
+        .ok_or_else(|| anyhow!("xbrew cache path is not valid UTF-8"))?;
+
+    let result = (|| -> Result<()> {
+        util::run(
+            "curl",
+            &[
+                "--fail",
+                "--location",
+                "--retry",
+                "3",
+                "--output",
+                temporary_text,
+                &artifact.url,
+            ],
+        )?;
+        let actual = sha256_file(&temporary)?;
+        if actual != artifact.sha256 {
+            bail!(
+                "checksum mismatch for '{}': expected {}, got {}",
+                binary.name,
+                artifact.sha256,
+                actual
+            );
+        }
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))?;
+        let parent = destination
+            .parent()
+            .ok_or_else(|| anyhow!("binary destination has no parent"))?;
+        std::fs::create_dir_all(parent)?;
+        std::fs::rename(&temporary, &destination)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(binary_record(binary, destination))
+}
+
+fn binary_asset_for_arch<'a>(binary: &'a BinarySpec, arch: &str) -> Result<&'a BinaryArtifact> {
+    match arch {
+        "aarch64" => Ok(&binary.aarch64),
+        "x86_64" => Ok(&binary.x86_64),
+        other => bail!(
+            "recipe binary '{}' does not support architecture '{other}'",
+            binary.name
+        ),
+    }
+}
+
+fn validate_binary_artifact(binary: &BinarySpec, artifact: &BinaryArtifact) -> Result<()> {
+    let valid_name = !binary.name.is_empty()
+        && binary.name != "."
+        && binary.name != ".."
+        && binary
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte));
+    if !valid_name {
+        bail!("recipe binary name must be a single safe filename");
+    }
+    if !artifact.url.starts_with("https://") {
+        bail!("recipe binary URL must use HTTPS");
+    }
+    if !valid_sha256(&artifact.sha256) {
+        bail!("recipe binary SHA-256 must be 64 lowercase hexadecimal characters");
+    }
+    Ok(())
+}
+
+fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| anyhow!("binary path is not valid UTF-8"))?;
+    let output = util::capture("sha256sum", &[path]);
+    let digest = output
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow!("sha256sum failed for {path}"))?;
+    if !valid_sha256(digest) {
+        bail!("sha256sum returned an invalid digest for {path}");
+    }
+    Ok(digest.to_string())
+}
+
+fn binary_destination(name: &str) -> Result<PathBuf> {
+    let valid_name = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte));
+    if !valid_name {
+        bail!("recipe binary name must be a single safe filename");
+    }
+    Ok(util::xbrew_dir()?.join("bin").join(name))
+}
+
+fn binary_record(binary: &BinarySpec, destination: PathBuf) -> Record {
+    Record {
+        backend: "recipe-binary".into(),
+        reference: binary.name.clone(),
+        kind: None,
+        artifacts: vec![destination.to_string_lossy().into_owned()],
+    }
+}
+
 /// Download a .dmg, mount it (auto-accepting any license), copy the app into
 /// /Applications, strip quarantine, and detach. Returns the installed app path.
 fn dmg_install(url: &str, app: &str) -> Result<String> {
@@ -1066,6 +1241,13 @@ pub fn info(name: &str) -> Result<()> {
                     if let Some(f) = r.arch.flatpak {
                         println!("  arch → flatpak: {f}");
                     }
+                    if let Some(binary) = r.arch.binary {
+                        println!(
+                            "  arch → verified binary: {} ({})",
+                            binary.name,
+                            std::env::consts::ARCH
+                        );
+                    }
                 }
                 Platform::Debian => {
                     if let Some(a) = r.debian.apt {
@@ -1132,4 +1314,66 @@ pub fn search(query: &str) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binary_spec() -> BinarySpec {
+        BinarySpec {
+            name: "dbotter".into(),
+            aarch64: BinaryArtifact {
+                url: "https://example.test/dbotter-aarch64".into(),
+                sha256: "a".repeat(64),
+            },
+            x86_64: BinaryArtifact {
+                url: "https://example.test/dbotter-x86_64".into(),
+                sha256: "b".repeat(64),
+            },
+        }
+    }
+
+    #[test]
+    fn binary_recipe_selects_the_matching_architecture() {
+        let binary = binary_spec();
+        assert!(binary_asset_for_arch(&binary, "aarch64")
+            .expect("aarch64 asset")
+            .url
+            .ends_with("aarch64"));
+        assert!(binary_asset_for_arch(&binary, "x86_64")
+            .expect("x86_64 asset")
+            .url
+            .ends_with("x86_64"));
+        assert!(binary_asset_for_arch(&binary, "riscv64").is_err());
+    }
+
+    #[test]
+    fn binary_recipe_rejects_unsafe_metadata() {
+        let mut binary = binary_spec();
+        binary.name = "../dbotter".into();
+        assert!(validate_binary_artifact(&binary, &binary.aarch64).is_err());
+
+        let mut binary = binary_spec();
+        binary.aarch64.url = "http://example.test/dbotter".into();
+        assert!(validate_binary_artifact(&binary, &binary.aarch64).is_err());
+
+        let mut binary = binary_spec();
+        binary.aarch64.sha256 = "not-a-sha".into();
+        assert!(validate_binary_artifact(&binary, &binary.aarch64).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sha256_file_measures_the_downloaded_bytes() {
+        let path =
+            std::env::temp_dir().join(format!("xbrew-sha256-contract-{}", std::process::id()));
+        std::fs::write(&path, b"abc").expect("write checksum fixture");
+        let digest = sha256_file(&path).expect("measure checksum fixture");
+        let _ = std::fs::remove_file(path);
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

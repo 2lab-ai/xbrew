@@ -50,7 +50,8 @@ Privileged commands go through `util::run_priv` (sudo unless root). See
 
 `brew` → `brew uninstall [--cask]`; `pacman`/`aur`/`pkgbuild` → `sudo pacman
 -Rns` (makepkg registers its builds in the pacman DB, so this is clean);
-`flatpak` → `flatpak uninstall`; `recipe-dmg` → `rm -rf` the recorded `.app`.
+`flatpak` → `flatpak uninstall`; `recipe-dmg` → remove the recorded `.app`;
+`recipe-binary` → remove only its validated `~/.xbrew/bin/<name>` artifact.
 
 ## Versioning & release (mirrors llmux)
 
@@ -83,6 +84,11 @@ aur = "nomachine"        # or pacman = "pkg" / flatpak = "app.id"
 [macos]
 cask = "nomachine"       # or dmg = "https://.../App-arm64.dmg" + app = "App.app"
 ```
+
+An Arch-only prebuilt executable can instead use `[arch.binary]` with a safe
+`name` and required `aarch64`/`x86_64` HTTPS URL + SHA-256 tables. xbrew
+verifies the selected immutable asset before atomically installing it under
+`~/.xbrew/bin`; this backend never invokes a shell installer.
 
 The file name must match `name` — it's the key users type, and a mismatch makes
 the recipe unreachable. `registry()` **skips a recipe that fails to parse**, so
