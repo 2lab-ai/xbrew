@@ -1,0 +1,10 @@
+name = "kakaotalk"
+description = "KakaoTalk — Korean messaging app; no native Linux build, so a Wine wrapper (binary: kakaotalk)"
+
+# There is no Linux-native KakaoTalk and no Homebrew cask (macOS ships it only
+# via the Mac App Store, which xbrew has no backend for) — so this is Arch-only.
+[arch]
+# AUR Wine wrapper: builds a wine prefix, pulls the Windows installer, registers
+# a desktop entry. The PKGBUILD already depends on wine + winetricks, so makepkg
+# pulls them. Requires the [multilib] repo enabled for the 32-bit wine libs.
+aur = "kakaotalk"
