@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -232,47 +232,139 @@ fn install_arch(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     bail!("no backend can install '{name}' on Arch (no recipe; not in brew, pacman, or the AUR)")
 }
 
+/// Which macOS backend a recipe selects. The precedence is fixed —
+/// cask -> formula -> dmg -> script, first one declared wins — and lives in one
+/// pure function so the order is a testable fact rather than the incidental
+/// shape of an if-chain that spawns package managers.
+#[derive(Debug, PartialEq, Eq)]
+enum MacBackend<'a> {
+    Cask(&'a str),
+    Formula(&'a str),
+    Dmg(&'a str),
+    Script,
+}
+
+fn macos_backend(r: &Recipe) -> Option<MacBackend<'_>> {
+    if let Some(cask) = &r.macos.cask {
+        return Some(MacBackend::Cask(cask));
+    }
+    if let Some(formula) = &r.macos.formula {
+        return Some(MacBackend::Formula(formula));
+    }
+    if let Some(dmg) = &r.macos.dmg {
+        return Some(MacBackend::Dmg(dmg));
+    }
+    if r.script.install.is_some() {
+        return Some(MacBackend::Script);
+    }
+    None
+}
+
+/// A `macos.formula` token is **data**: xbrew hands it to brew as exactly one
+/// argv item and never through a shell. Accept only Homebrew's own grammar — a
+/// plain name, or a fully-qualified `user/tap/formula` — so a recipe cannot
+/// smuggle in a second argument (whitespace), a flag (leading dash), a path
+/// (`.`, `..`, an extra or empty component) or a shell metacharacter. Checked
+/// before brew is ever handed the token. (`install_macos` has by then run
+/// `util::which("brew")`, which spawns a fixed `sh -c "command -v brew"` that
+/// never sees the token — so this is "brew never receives it", not "no process
+/// has started".)
+pub fn validate_formula_token(token: &str) -> Result<()> {
+    let reject = |why: &str| anyhow!("invalid Homebrew formula token '{token}': {why}");
+    let parts: Vec<&str> = token.split('/').collect();
+    // 1 = a formula in a tapped/core repo, 3 = user/tap/formula. Nothing else
+    // is a Homebrew reference.
+    if !matches!(parts.len(), 1 | 3) {
+        return Err(reject("expected either `formula` or `user/tap/formula`"));
+    }
+    for part in parts {
+        if part.is_empty() {
+            return Err(reject("empty name component"));
+        }
+        if part.starts_with('-') {
+            return Err(reject("a leading dash would be read as a brew flag"));
+        }
+        if part.starts_with('.') {
+            return Err(reject("name components may not start with a dot"));
+        }
+        if !part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.+@".contains(&byte))
+        {
+            return Err(reject(
+                "only letters, digits and the characters -_.+@ are allowed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// macOS: a curated recipe is authoritative when it declares a macOS/script
 /// backend; only names with no such recipe fall back to generic Homebrew.
 fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
     let has_brew = util::which("brew");
 
     if let Some(r) = recipe {
-        if let Some(cask) = &r.macos.cask {
-            if !has_brew {
-                bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `xbrew install brew` first.");
+        match macos_backend(r) {
+            Some(MacBackend::Cask(cask)) => {
+                if !has_brew {
+                    bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `xbrew install brew` first.");
+                }
+                if brew_installed(cask, "cask") {
+                    report_adopted(name, cask);
+                } else {
+                    brew_install(cask, "cask")?;
+                }
+                return Ok(Record {
+                    backend: "brew".into(),
+                    reference: cask.to_string(),
+                    kind: Some("cask".into()),
+                    artifacts: vec![],
+                });
             }
-            if brew_installed(cask, "cask") {
-                report_adopted(name, cask);
-            } else {
-                brew_install(cask, "cask")?;
+            Some(MacBackend::Formula(formula)) => {
+                validate_formula_token(formula).with_context(|| {
+                    format!("recipe '{name}' declares an unusable macOS formula")
+                })?;
+                if !has_brew {
+                    bail!("'{name}' installs as a Homebrew formula, but brew isn't installed. Run `xbrew install brew` first.");
+                }
+                if brew_installed(formula, "formula") {
+                    report_adopted(name, formula);
+                } else {
+                    brew_install(formula, "formula")?;
+                }
+                // Recorded like any other brew formula, so uninstall/update/
+                // version route through the generic brew paths unchanged.
+                return Ok(Record {
+                    backend: "brew".into(),
+                    reference: formula.to_string(),
+                    kind: Some("formula".into()),
+                    artifacts: vec![],
+                });
             }
-            return Ok(Record {
-                backend: "brew".into(),
-                reference: cask.clone(),
-                kind: Some("cask".into()),
-                artifacts: vec![],
-            });
-        }
-        if let Some(dmg) = &r.macos.dmg {
-            let app = r.macos.app.clone().ok_or_else(|| {
-                anyhow!("recipe '{name}' has a dmg but no `app` name for uninstall")
-            })?;
-            let dest = format!("/Applications/{app}");
-            if std::path::Path::new(&dest).exists() {
-                report_adopted(name, &app);
-            } else {
-                dmg_install(dmg, &app)?;
+            Some(MacBackend::Dmg(dmg)) => {
+                let app = r.macos.app.clone().ok_or_else(|| {
+                    anyhow!("recipe '{name}' has a dmg but no `app` name for uninstall")
+                })?;
+                let dest = format!("/Applications/{app}");
+                if std::path::Path::new(&dest).exists() {
+                    report_adopted(name, &app);
+                } else {
+                    dmg_install(dmg, &app)?;
+                }
+                return Ok(Record {
+                    backend: "recipe-dmg".into(),
+                    reference: app,
+                    kind: None,
+                    artifacts: vec![dest],
+                });
             }
-            return Ok(Record {
-                backend: "recipe-dmg".into(),
-                reference: app,
-                kind: None,
-                artifacts: vec![dest],
-            });
-        }
-        if let Some(res) = recipe_script_install(name, r) {
-            return res;
+            Some(MacBackend::Script) | None => {
+                if let Some(res) = recipe_script_install(name, r) {
+                    return res;
+                }
+            }
         }
     }
 
@@ -1269,6 +1361,9 @@ pub fn info(name: &str) -> Result<()> {
                     if let Some(c) = r.macos.cask {
                         println!("  macos → cask: {c}");
                     }
+                    if let Some(f) = r.macos.formula {
+                        println!("  macos → formula: {f}");
+                    }
                     if let Some(d) = r.macos.dmg {
                         println!("  macos → dmg: {d}");
                     }
@@ -1319,6 +1414,100 @@ pub fn search(query: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::{MacSpec, ScriptSpec};
+
+    /// A recipe carrying exactly the macOS backends named, so the precedence
+    /// between them can be read off without installing anything.
+    fn mac_recipe(cask: Option<&str>, formula: Option<&str>, dmg: bool, script: bool) -> Recipe {
+        Recipe {
+            name: "probe".into(),
+            macos: MacSpec {
+                cask: cask.map(str::to_string),
+                formula: formula.map(str::to_string),
+                dmg: dmg.then(|| "https://example.test/App.dmg".to_string()),
+                app: dmg.then(|| "App.app".to_string()),
+            },
+            script: ScriptSpec {
+                install: script.then(|| "true".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn macos_precedence_is_cask_then_formula_then_dmg_then_script() {
+        assert_eq!(
+            macos_backend(&mac_recipe(Some("app"), Some("cli"), true, true)),
+            Some(MacBackend::Cask("app"))
+        );
+        assert_eq!(
+            macos_backend(&mac_recipe(None, Some("cli"), true, true)),
+            Some(MacBackend::Formula("cli"))
+        );
+        assert_eq!(
+            macos_backend(&mac_recipe(None, None, true, true)),
+            Some(MacBackend::Dmg("https://example.test/App.dmg"))
+        );
+        assert_eq!(
+            macos_backend(&mac_recipe(None, None, false, true)),
+            Some(MacBackend::Script)
+        );
+        assert_eq!(macos_backend(&mac_recipe(None, None, false, false)), None);
+    }
+
+    #[test]
+    fn formula_tokens_accept_the_homebrew_grammar() {
+        for token in [
+            "somawork",
+            "somawork-preview",
+            "node@20",
+            "libc++",
+            "2lab-ai/tap/somawork",
+            "2lab-ai/tap/somawork-preview",
+            "stablyai/orca/orca",
+        ] {
+            validate_formula_token(token)
+                .unwrap_or_else(|e| panic!("{token} should be accepted: {e:#}"));
+        }
+    }
+
+    /// Everything that could turn one argv item into something else: a second
+    /// argument, a flag, a path, or a shell word.
+    #[test]
+    fn formula_tokens_reject_anything_that_is_not_a_reference() {
+        for token in [
+            "",
+            "   ",
+            "somawork --build-from-source",
+            "somawork\tsecond",
+            "--formula",
+            "-somawork",
+            "2lab-ai/-tap/somawork",
+            "somawork;id",
+            "somawork|id",
+            "somawork&&id",
+            "$(id)",
+            "`id`",
+            "somawork\nid",
+            "some'work",
+            "some\"work",
+            "some*work",
+            "some>work",
+            "../../../etc/passwd",
+            "2lab-ai/tap/../etc",
+            "2lab-ai/tap/.",
+            "/absolute/tap/somawork",
+            "2lab-ai//somawork",
+            "2lab-ai/tap",
+            "2lab-ai/tap/somawork/extra",
+        ] {
+            assert!(
+                validate_formula_token(token).is_err(),
+                "{token:?} must be rejected"
+            );
+        }
+    }
 
     fn binary_spec() -> BinarySpec {
         BinarySpec {
