@@ -112,9 +112,10 @@ pub struct MacSpec {
     pub app: Option<String>,
 }
 
-/// Every `recipes/*.toml` (embedded) plus user recipes in
-/// `~/.xbrew/recipes/*.toml`, which override built-ins by name.
-pub fn registry() -> BTreeMap<String, Recipe> {
+/// Only the recipes xbrew ships — `~/.xbrew/recipes` deliberately not
+/// consulted. The reviewable set, and the one xbrew resolves against when it is
+/// acting on its own behalf rather than on a name the user typed.
+fn builtin_registry() -> BTreeMap<String, Recipe> {
     let mut map = BTreeMap::new();
     for file in BUILTIN_RECIPES.files() {
         if file.path().extension().and_then(|s| s.to_str()) != Some("toml") {
@@ -126,6 +127,13 @@ pub fn registry() -> BTreeMap<String, Recipe> {
             }
         }
     }
+    map
+}
+
+/// Every `recipes/*.toml` (embedded) plus user recipes in
+/// `~/.xbrew/recipes/*.toml`, which override built-ins by name.
+pub fn registry() -> BTreeMap<String, Recipe> {
+    let mut map = builtin_registry();
     if let Ok(dir) = user_recipe_dir() {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
@@ -149,6 +157,19 @@ fn user_recipe_dir() -> anyhow::Result<std::path::PathBuf> {
 
 pub fn get(name: &str) -> Option<Recipe> {
     registry().remove(name)
+}
+
+/// A **built-in** recipe by name, ignoring `~/.xbrew/recipes` entirely.
+///
+/// `get()` is the lookup for a package the *user* named, where an override is a
+/// feature. This one is for the recipes xbrew runs on its own initiative — the
+/// implicit Homebrew bootstrap — where it would not be: asking for an unrelated
+/// formula would otherwise execute whatever anything able to write the user's
+/// home had left in `~/.xbrew/recipes/brew.toml`. `xbrew install brew` still
+/// goes through `get()` and still honours an override, because there the user
+/// chose both the recipe and the moment.
+pub fn builtin(name: &str) -> Option<Recipe> {
+    builtin_registry().remove(name)
 }
 
 #[cfg(test)]
@@ -269,6 +290,20 @@ mod tests {
         for (path, r) in builtins() {
             if let Some(formula) = &r.macos.formula {
                 crate::resolve::validate_formula_token(formula)
+                    .unwrap_or_else(|e| panic!("{path}: {e:#}"));
+            }
+        }
+    }
+
+    /// Same for a cask token: it is one argv item handed to brew, so a
+    /// built-in carrying something outside Homebrew's grammar would be a
+    /// shipped defect — and now an install-time refusal rather than a
+    /// mishandled string.
+    #[test]
+    fn builtin_cask_tokens_are_valid_homebrew_references() {
+        for (path, r) in builtins() {
+            if let Some(cask) = &r.macos.cask {
+                crate::resolve::validate_cask_token(cask)
                     .unwrap_or_else(|e| panic!("{path}: {e:#}"));
             }
         }

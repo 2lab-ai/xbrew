@@ -13,7 +13,25 @@ use crate::version;
 // install
 // ---------------------------------------------------------------------------
 
-pub fn install(name: &str) -> Result<()> {
+/// Whether *this* xbrew invocation has already tried to install Homebrew as an
+/// implicit dependency, and what came of it.
+///
+/// Invocation-local and threaded by hand rather than kept in a static: a static
+/// would leak across tests and across library calls, and "once per process" is
+/// not the property wanted — "once per thing the user asked for" is. The
+/// failure is carried as its already-rendered chain because `anyhow::Error`
+/// cannot be cloned, and the point of caching it is that the *second* package
+/// reports the real reason (`sh` exited with exit status: 3) rather than a
+/// fresh, uninformative "brew isn't installed".
+#[derive(Debug, Default)]
+enum BrewBootstrap {
+    #[default]
+    NotAttempted,
+    Succeeded,
+    Failed(String),
+}
+
+fn install(name: &str, bootstrap: &mut BrewBootstrap) -> Result<()> {
     if name == "xbrew" {
         bail!("xbrew installs *other* things — to update xbrew itself, run `xbrew self-update`.");
     }
@@ -34,7 +52,7 @@ pub fn install(name: &str) -> Result<()> {
         .as_ref()
         .and_then(|r| r.script.provides_bin.as_deref())
     {
-        if util::which(bin) {
+        if provides_bin_present(bin) {
             println!("✓ '{name}' already present ({bin} on PATH) — adopting into xbrew.");
             let record = Record {
                 backend: "script".into(),
@@ -49,7 +67,7 @@ pub fn install(name: &str) -> Result<()> {
     }
 
     let record = match plat {
-        Platform::MacOS => install_macos(name, recipe.as_ref())?,
+        Platform::MacOS => install_macos(name, recipe.as_ref(), bootstrap)?,
         Platform::Arch => install_arch(name, recipe.as_ref())?,
         Platform::Debian => install_debian(name, recipe.as_ref())?,
         Platform::Rhel => install_rhel(name, recipe.as_ref())?,
@@ -69,13 +87,17 @@ pub fn install(name: &str) -> Result<()> {
 
 /// Install several packages in one go; one failure doesn't stop the rest.
 pub fn install_many(names: &[String]) -> Result<()> {
+    // One bootstrap context for the whole invocation: Homebrew is installed at
+    // most once no matter how many brew-backed names are on the command line,
+    // and a failed attempt is reported to the rest rather than repeated at them.
+    let mut bootstrap = BrewBootstrap::default();
     if names.len() == 1 {
-        return install(&names[0]);
+        return install(&names[0], &mut bootstrap);
     }
     let mut failed = Vec::new();
     for name in names {
         println!("\n\x1b[1m── {name} ──\x1b[0m");
-        if let Err(e) = install(name) {
+        if let Err(e) = install(name, &mut bootstrap) {
             eprintln!("\x1b[31merror:\x1b[0m {e:#}");
             failed.push(name.clone());
         }
@@ -264,18 +286,32 @@ fn macos_backend(r: &Recipe) -> Option<MacBackend<'_>> {
 /// argv item and never through a shell. Accept only Homebrew's own grammar — a
 /// plain name, or a fully-qualified `user/tap/formula` — so a recipe cannot
 /// smuggle in a second argument (whitespace), a flag (leading dash), a path
-/// (`.`, `..`, an extra or empty component) or a shell metacharacter. Checked
-/// before brew is ever handed the token. (`install_macos` has by then run
-/// `util::which("brew")`, which spawns a fixed `sh -c "command -v brew"` that
-/// never sees the token — so this is "brew never receives it", not "no process
-/// has started".)
+/// (`.`, `..`, an extra or empty component) or a shell metacharacter.
+///
+/// Checked before brew is ever handed the token and, on the formula and cask
+/// recipe paths, before the Homebrew bootstrap and the PATH probe it opens
+/// with — so an unusable token buys no subprocess at all. (A recipe that also
+/// declares `script.provides_bin` runs that adoption probe first; it is a fixed
+/// literal and never sees the token either.)
 pub fn validate_formula_token(token: &str) -> Result<()> {
-    let reject = |why: &str| anyhow!("invalid Homebrew formula token '{token}': {why}");
+    validate_reference_token("formula", token)
+}
+
+/// A `macos.cask` token is data on exactly the same terms, so it gets exactly
+/// the same grammar — one function, so the two can never drift into a cask
+/// being allowed something a formula is not. Checked before the Homebrew
+/// bootstrap and before brew is handed the token.
+pub fn validate_cask_token(token: &str) -> Result<()> {
+    validate_reference_token("cask", token)
+}
+
+fn validate_reference_token(kind: &str, token: &str) -> Result<()> {
+    let reject = |why: &str| anyhow!("invalid Homebrew {kind} token '{token}': {why}");
     let parts: Vec<&str> = token.split('/').collect();
-    // 1 = a formula in a tapped/core repo, 3 = user/tap/formula. Nothing else
-    // is a Homebrew reference.
+    // 1 = an item in a tapped/core repo, 3 = user/tap/item. Nothing else is a
+    // Homebrew reference.
     if !matches!(parts.len(), 1 | 3) {
-        return Err(reject("expected either `formula` or `user/tap/formula`"));
+        return Err(reject("expected either `name` or `user/tap/name`"));
     }
     for part in parts {
         if let Some(why) = reference_component_fault(part) {
@@ -373,37 +409,222 @@ fn brew_trust_tap(tap: &str) -> Result<()> {
 /// The resulting `Record` is deliberately dropped: `install()` records what the
 /// user asked for, and an implicit dependency is not that. `xbrew install brew`
 /// remains the way to have xbrew own (and later uninstall) Homebrew itself.
-fn ensure_brew(name: &str, backend: &str) -> Result<()> {
-    if util::which("brew") {
+fn ensure_brew(name: &str, backend: &str, bootstrap: &mut BrewBootstrap) -> Result<()> {
+    ensure_brew_for(
+        &format!("'{name}' installs as a Homebrew {backend}, but brew isn't installed"),
+        &format!("'{name}'"),
+        &format!("`xbrew install {name}`"),
+        bootstrap,
+    )
+}
+
+/// The same acquisition for a dependent that isn't a single named package — a
+/// manifest's `trust:` list, which has to reach brew before any entry installs.
+/// `need` opens the error, `what` names the dependent in the progress line,
+/// `retry` is the command to run again.
+fn ensure_brew_for(
+    need: &str,
+    what: &str,
+    retry: &str,
+    bootstrap: &mut BrewBootstrap,
+) -> Result<()> {
+    if brew_reachable() {
         return Ok(());
     }
-    let need = format!("'{name}' installs as a Homebrew {backend}, but brew isn't installed");
-    let brew = recipe::get("brew")
-        .ok_or_else(|| anyhow!("{need}, and no 'brew' recipe is available to install it."))?;
-    println!("… '{name}' needs Homebrew — installing Homebrew first.");
+    // At most one attempt per invocation. Homebrew's installer is a curl|bash
+    // that can prompt, take minutes and touch /usr/local — running it again
+    // because a second package also wanted brew is not a retry, it is a second
+    // install.
+    match bootstrap {
+        BrewBootstrap::NotAttempted => {}
+        BrewBootstrap::Succeeded => {
+            bail!("{need}, and the Homebrew installed earlier in this run is no longer reachable.")
+        }
+        BrewBootstrap::Failed(why) => {
+            bail!("{need}, and installing Homebrew already failed earlier in this run: {why}")
+        }
+    }
+    match bootstrap_brew(need, what, retry) {
+        Ok(()) => {
+            *bootstrap = BrewBootstrap::Succeeded;
+            Ok(())
+        }
+        Err(e) => {
+            *bootstrap = BrewBootstrap::Failed(format!("{e:#}"));
+            Err(e)
+        }
+    }
+}
+
+/// The one attempt: run the installer, then find what it produced.
+fn bootstrap_brew(need: &str, what: &str, retry: &str) -> Result<()> {
+    let brew = recipe::builtin("brew").ok_or_else(|| {
+        anyhow!("{need}, and no built-in 'brew' recipe is available to install it.")
+    })?;
+    println!("… {what} needs Homebrew — installing Homebrew first.");
     recipe_script_install("brew", &brew)
-        .ok_or_else(|| anyhow!("{need}, and the 'brew' recipe carries no installer."))?
+        .ok_or_else(|| anyhow!("{need}, and the built-in 'brew' recipe carries no installer."))?
         .with_context(|| format!("{need}, and installing Homebrew for it failed"))?;
     // Exit 0 is not the receipt — a reachable `brew` is. Homebrew's installer
-    // can succeed into a prefix this shell's PATH does not carry, and the
-    // backend that follows would then die on a missing command instead.
-    if !util::which("brew") {
+    // routinely succeeds into a prefix this already-running process's PATH does
+    // not carry, so the same discovery that ran before the install runs again
+    // after it; only if *that* finds nothing is the install unusable.
+    if !brew_reachable() {
         bail!(
-            "Homebrew's installer finished but `brew` is still not on PATH. \
-             Add Homebrew's bin directory to PATH (or open a new shell), then \
-             re-run `xbrew install {name}`."
+            "Homebrew's installer finished but `brew` is still not on PATH and no \
+             Homebrew was found in the standard prefixes. Add Homebrew's bin \
+             directory to PATH (or open a new shell), then re-run {retry}."
         );
     }
     Ok(())
 }
 
+/// Can this process run `brew`? PATH first; failing that, look where Homebrew
+/// actually installs itself and, when a real executable is there, prepend that
+/// **one verified directory** to this process's PATH so every child xbrew
+/// spawns from here on resolves `brew` by name like any other command.
+///
+/// This is not a nicety: `/opt/homebrew/bin/brew` exists on every Apple Silicon
+/// Mac whose user has Homebrew, and it is *off* PATH in any process whose
+/// environment never went through `brew shellenv` — a launchd job, a fresh
+/// non-login shell, or the shell that just ran Homebrew's own installer.
+/// Without this, xbrew either refuses an install it could complete or installs
+/// a second Homebrew over the first.
+fn brew_reachable() -> bool {
+    if util::which("brew") {
+        return true;
+    }
+    for candidate in brew_candidates() {
+        // A directory, a dangling symlink or a non-executable file is not a
+        // brew; putting its parent on PATH would only move the failure.
+        if !is_executable_file(&candidate) {
+            continue;
+        }
+        let Some(dir) = candidate.parent() else {
+            continue;
+        };
+        prepend_to_path(dir);
+        if util::which("brew") {
+            println!("… found Homebrew at {} — using it.", candidate.display());
+            return true;
+        }
+    }
+    false
+}
+
+/// Where to look for an off-PATH Homebrew, in order: the prefix the environment
+/// declares, then the two official ones — `/opt/homebrew` (Apple Silicon) then
+/// `/usr/local` (Intel).
+///
+/// `HOMEBREW_PREFIX` goes **first, not instead**. It is Homebrew's own statement
+/// of the prefix in use and deserves priority, but it is also an ordinary
+/// exported variable: it survives in shells whose Homebrew was moved or removed,
+/// and honouring a stale one exclusively would report "Homebrew is not
+/// installed" on a machine that plainly has it at `/opt/homebrew`. Preferring
+/// the declaration and then falling back costs nothing — the first hit wins, so
+/// a correct `HOMEBREW_PREFIX` is still the only path ever examined.
+fn brew_candidates() -> Vec<PathBuf> {
+    brew_candidates_for(std::env::var_os("HOMEBREW_PREFIX"))
+}
+
+/// The list itself, as a pure function of the declared prefix. Pure because the
+/// unset case — the one a real Mac is in whenever its shell never ran `brew
+/// shellenv` — is unreachable from the lifecycle sandbox, which must always
+/// declare a prefix; without this seam the default order would be asserted by
+/// nothing.
+fn brew_candidates_for(declared_prefix: Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
+    if let Some(prefix) = declared_prefix {
+        if !prefix.is_empty() {
+            candidates.push(PathBuf::from(prefix).join("bin").join("brew"));
+        }
+    }
+    for official in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] {
+        let official = PathBuf::from(official);
+        // The common case is a declared prefix that *is* one of these; probing
+        // the same path twice would just stat it twice to the same answer.
+        if !candidates.contains(&official) {
+            candidates.push(official);
+        }
+    }
+    candidates
+}
+
+/// "Is brew usable here?" — the single answer every macOS caller shares, so no
+/// two of them can disagree about whether this machine has Homebrew.
+///
+/// On macOS that means the off-PATH prefixes count (and the winner is put on
+/// PATH); everywhere else it stays a plain PATH probe, because the prefixes
+/// `brew_candidates` knows are Homebrew's macOS ones and linuxbrew's is not
+/// among them. So Arch/Debian/RHEL keep exactly the semantics they had.
+fn brew_present() -> bool {
+    if cfg!(target_os = "macos") {
+        return brew_reachable();
+    }
+    util::which("brew")
+}
+
+/// A recipe's `provides_bin` adoption probe: "is this already here?".
+///
+/// Plain PATH for every binary but `brew`, which defers to `brew_present` — its
+/// PATH answer is wrong on any Mac whose shell never ran `brew shellenv`, and
+/// answering "no" there means re-running Homebrew's installer over a working
+/// install.
+fn provides_bin_present(bin: &str) -> bool {
+    if bin == "brew" {
+        return brew_present();
+    }
+    util::which(bin)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// Put `dir` at the front of this process's PATH.
+///
+/// Say what that actually grants, because the narrow name hides it: the change
+/// is **process-global** and inherited by every later child, so `dir` gets
+/// ordinary PATH precedence for *all* subsequent commands, not only `brew`. It
+/// is therefore a trust decision — accepting a discovered Homebrew prefix's
+/// `bin` as a place to resolve commands from. That trust is the same one already
+/// implied by running its `brew` at all, which executes that prefix's own Ruby
+/// and formula code; what is new is the scope, not the trust.
+///
+/// Reached only on the macOS install path, and only with a directory just
+/// observed to hold an executable `brew`. `std::env::set_var` is not
+/// thread-safe, and at this point xbrew has spawned no background thread — the
+/// only one it ever spawns is `util::keep_sudo_alive`'s refresher, from
+/// `update()` and only for the Linux privileged backends — so there is no
+/// concurrent reader to race.
+fn prepend_to_path(dir: &Path) {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries = vec![dir.to_path_buf()];
+    entries.extend(std::env::split_paths(&current));
+    if let Ok(joined) = std::env::join_paths(entries) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
 /// macOS: a curated recipe is authoritative when it declares a macOS/script
 /// backend; only names with no such recipe fall back to generic Homebrew.
-fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
+fn install_macos(
+    name: &str,
+    recipe: Option<&Recipe>,
+    bootstrap: &mut BrewBootstrap,
+) -> Result<Record> {
     if let Some(r) = recipe {
         match macos_backend(r) {
             Some(MacBackend::Cask(cask)) => {
-                ensure_brew(name, "cask")?;
+                // Before the bootstrap, for the same reason the formula branch
+                // validates before its own: the bootstrap is a shell installer,
+                // and a token that is not a Homebrew reference must not be able
+                // to buy itself one.
+                validate_cask_token(cask)
+                    .with_context(|| format!("recipe '{name}' declares an unusable macOS cask"))?;
+                ensure_brew(name, "cask", bootstrap)?;
                 if brew_installed(cask, "cask") {
                     report_adopted(name, cask);
                 } else {
@@ -420,7 +641,7 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
                 validate_formula_token(formula).with_context(|| {
                     format!("recipe '{name}' declares an unusable macOS formula")
                 })?;
-                ensure_brew(name, "formula")?;
+                ensure_brew(name, "formula", bootstrap)?;
                 if brew_installed(formula, "formula") {
                     // Nothing is installed and no dependency is resolved, so
                     // there is nothing to trust for — leave the trust store
@@ -475,8 +696,10 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
 
     // No recipe: nothing declared Homebrew as this package's backend, so a
     // missing brew is not a dependency to resolve — installing a package
-    // manager to look up a name that may not exist is not what was asked.
-    if util::which("brew") {
+    // manager to look up a name that may not exist is not what was asked. But
+    // *using* a brew that is merely off-PATH is not installing one, and the
+    // refusal below is only true when Homebrew is genuinely absent.
+    if brew_reachable() {
         if let Some(kind) = brew_provides(name) {
             if brew_installed(name, &kind) {
                 report_adopted(name, name);
@@ -705,18 +928,28 @@ pub fn bundle(files: &[PathBuf]) -> Result<()> {
         }
     }
 
-    // Register trusted taps first — brew itself is just another xbrew package.
-    // Every declared tap is checked before anything runs, so a manifest that
-    // can't express a tap fails closed instead of installing its entries
-    // against whatever did register.
+    // Register trusted taps first. Every declared tap is checked before
+    // anything runs, so a manifest that can't express a tap fails closed
+    // instead of installing its entries against whatever did register.
     for t in &trust {
         validate_tap_token(t)
             .with_context(|| format!("manifest declares an unusable tap '{t}'"))?;
     }
+    // One context for the whole manifest. The trust list and the entries want
+    // the same Homebrew, so acquiring it here goes through the same gate the
+    // entries use: the explicit `install("brew")` route this used to take leaves
+    // the context untouched (and honours a user recipe override), so the first
+    // brew-backed entry would run Homebrew's installer a second time.
+    let mut bootstrap = BrewBootstrap::default();
     if !trust.is_empty() {
-        if !util::which("brew") {
+        if !brew_reachable() {
             println!("\n\x1b[1m── ensuring Homebrew (needed for trusted taps) ──\x1b[0m");
-            install("brew")?;
+            ensure_brew_for(
+                "this manifest declares trusted taps, but brew isn't installed",
+                "this manifest",
+                "`xbrew bundle`",
+                &mut bootstrap,
+            )?;
         }
         for t in &trust {
             println!("trust tap: {t}");
@@ -736,7 +969,7 @@ pub fn bundle(files: &[PathBuf]) -> Result<()> {
     let mut failed: Vec<String> = Vec::new();
     for e in &entries {
         println!("\n\x1b[1m── {} ──\x1b[0m", e.name);
-        if let Err(err) = install(&e.name) {
+        if let Err(err) = install(&e.name, &mut bootstrap) {
             eprintln!("\x1b[31merror:\x1b[0m {err:#}");
             failed.push(format!("{} (install failed)", e.name));
             continue;
@@ -1151,7 +1384,7 @@ fn recipe_script_install(name: &str, r: &Recipe) -> Option<Result<Record>> {
         artifacts: vec![],
     };
     if let Some(bin) = &r.script.provides_bin {
-        if util::which(bin) {
+        if provides_bin_present(bin) {
             println!("✓ '{name}' already present ({bin} on PATH).");
             return Some(Ok(record));
         }
@@ -1521,7 +1754,10 @@ pub fn search(query: &str) -> Result<()> {
         }
         println!();
     }
-    if util::which("brew") {
+    // Same presence question as the install paths ask, so it gets the same
+    // answer. A plain PATH probe dropped this whole section — silently, with no
+    // error to read — on a Mac whose Homebrew is merely off-PATH.
+    if brew_present() {
         println!("== brew ==");
         let _ = util::run("brew", &["search", query]);
     }
@@ -1639,6 +1875,88 @@ mod tests {
                 "{token:?} must be rejected"
             );
         }
+    }
+
+    /// Casks and formulae are the same kind of thing to this code — an argv
+    /// item handed to brew — so they are held to the same grammar by
+    /// construction. Asserted as an equivalence rather than a second token
+    /// list, because a second list is exactly how the two would drift.
+    /// The search order, including the case no sandbox can reproduce: no
+    /// `HOMEBREW_PREFIX`, which is every Mac whose shell never ran `brew
+    /// shellenv` — exactly the host where `/opt/homebrew/bin/brew` exists and
+    /// `command -v brew` finds nothing.
+    ///
+    /// A declared prefix goes *first*, not *instead*: `HOMEBREW_PREFIX` can name
+    /// a prefix that has no brew (a stale export, a prefix that was removed),
+    /// and refusing to look at the official locations because of it would turn a
+    /// wrong environment variable into "Homebrew is not installed" on a machine
+    /// that plainly has it. Duplicates are collapsed so the usual case — a
+    /// declared prefix that *is* one of the official ones — probes it once.
+    #[test]
+    fn brew_is_looked_for_in_the_declared_prefix_then_the_official_ones() {
+        let opt = PathBuf::from("/opt/homebrew/bin/brew");
+        let local = PathBuf::from("/usr/local/bin/brew");
+
+        // Nothing declared: the two official prefixes, Apple Silicon first.
+        assert_eq!(brew_candidates_for(None), vec![opt.clone(), local.clone()]);
+        // An empty value declares nothing.
+        assert_eq!(
+            brew_candidates_for(Some("".into())),
+            vec![opt.clone(), local.clone()]
+        );
+        // Declared and elsewhere: first, then the officials as fallbacks.
+        assert_eq!(
+            brew_candidates_for(Some("/home/linuxbrew/.linuxbrew".into())),
+            vec![
+                PathBuf::from("/home/linuxbrew/.linuxbrew/bin/brew"),
+                opt.clone(),
+                local.clone(),
+            ]
+        );
+        // Declared *is* an official one: probed once, and still first.
+        assert_eq!(
+            brew_candidates_for(Some("/opt/homebrew".into())),
+            vec![opt.clone(), local.clone()]
+        );
+        assert_eq!(
+            brew_candidates_for(Some("/usr/local".into())),
+            vec![local, opt]
+        );
+    }
+
+    #[test]
+    fn cask_tokens_are_held_to_the_formula_grammar() {
+        for token in [
+            "slack",
+            "microsoft-edge",
+            "node@20",
+            "2lab-ai/tap/llmux-islands",
+            "stablyai/orca/orca",
+            "",
+            "   ",
+            "app --force",
+            "--cask",
+            "-app",
+            "app;id",
+            "$(id)",
+            "`id`",
+            "app\nid",
+            "../../../etc/passwd",
+            "vendor/tap/../etc",
+            "/absolute/tap/app",
+            "vendor/tap",
+            "vendor/tap/app/extra",
+            "vendor//app",
+        ] {
+            assert_eq!(
+                validate_cask_token(token).is_ok(),
+                validate_formula_token(token).is_ok(),
+                "{token:?} is judged differently as a cask than as a formula"
+            );
+        }
+        // …and the grammar is the intended one, not merely a shared mistake.
+        assert!(validate_cask_token("2lab-ai/tap/llmux-islands").is_ok());
+        assert!(validate_cask_token("app;id").is_err());
     }
 
     #[test]
