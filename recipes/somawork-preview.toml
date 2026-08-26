@@ -1,0 +1,12 @@
+name = "somawork-preview"
+description = "SomaWork preview channel — preview runtime and controller onboarding, installed from 2lab-ai's tap"
+
+# Pair-installable with the stable `somawork` recipe: each channel is its own
+# `keg_only` runtime keg installed flat at its own prefix, which the controller
+# resolves through `brew --prefix` — nothing is nested below that prefix. Only
+# `somawork-cli` links bin/somawork, and both runtimes depend on it, so the two
+# channels coexist without either owning a shared name.
+# macOS ARM64 only for v1.
+
+[macos]
+formula = "2lab-ai/tap/somawork-preview"

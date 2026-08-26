@@ -1,0 +1,13 @@
+name = "somawork"
+description = "SomaWork — production runtime and controller onboarding, installed from 2lab-ai's tap"
+
+# macOS ARM64 only for v1: SomaWork ships as signed-by-hash darwin-arm64 tar
+# assets, so there is no Linux backend here (and no shell installer — the
+# formula is the only supported path).
+
+[macos]
+# Fully-qualified formula from 2lab-ai's own tap; the token auto-taps on
+# install. The runtime formula depends_on the controller formula, so brew pulls
+# in the `somawork` executable and its Node/llmux dependencies too. Stable and
+# preview runtimes coexist; only the controller links bin/somawork.
+formula = "2lab-ai/tap/somawork"

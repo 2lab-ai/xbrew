@@ -41,6 +41,9 @@ Otherwise, per platform:
 | Debian   | recipe → brew → apt |
 | RHEL     | recipe → brew → dnf/yum |
 
+When a macOS recipe declares more than one backend the order is fixed —
+**cask → formula → dmg → script**, first one declared wins (`resolve::macos_backend`).
+
 The choice lands in `state.json` as `{ backend, reference, kind?, artifacts? }`.
 Each backend adopts an already-installed package instead of reinstalling.
 Privileged commands go through `util::run_priv` (sudo unless root). See
@@ -85,6 +88,23 @@ aur = "nomachine"        # or pacman = "pkg" / flatpak = "app.id"
 cask = "nomachine"       # or dmg = "https://.../App-arm64.dmg" + app = "App.app"
 ```
 
+A tool that ships as a **formula** rather than an app bundle uses `formula`
+instead of `cask` — plain name or fully-qualified, which auto-taps on install:
+
+```toml
+[macos]
+formula = "2lab-ai/tap/somawork"
+```
+
+It records as `{ backend = "brew", kind = "formula" }`, so uninstall/update/
+version route through the same generic brew paths a native formula does. The
+token is data handed to `brew` as exactly one argv item and never through a
+shell: `resolve::validate_formula_token` rejects anything outside Homebrew's
+grammar (whitespace, a leading dash, `.`/`..`, extra or empty path components,
+shell metacharacters) *before brew is ever handed the token* — the `which brew`
+probe that runs first is a fixed literal and never sees it. Casks are not yet
+validated.
+
 An Arch-only prebuilt executable can instead use `[arch.binary]` with a safe
 `name` and required `aarch64`/`x86_64` HTTPS URL + SHA-256 tables. xbrew
 verifies the selected immutable asset before atomically installing it under
@@ -93,7 +113,15 @@ verifies the selected immutable asset before atomically installing it under
 The file name must match `name` — it's the key users type, and a mismatch makes
 the recipe unreachable. `registry()` **skips a recipe that fails to parse**, so
 a typo would ship as a missing package rather than an error; the tests in
-`recipe.rs` parse every embedded recipe to catch that at build time.
+`recipe.rs` parse every embedded recipe to catch that at build time. Those tests
+read `BUILTIN_RECIPES` directly, never `get()`/`registry()`, which would merge
+the developer's own `~/.xbrew/recipes` into a shipped-recipe assertion.
+
+`include_dir!` only embeds files that existed at compile time, and emitting any
+`rerun-if-*` directive turns off cargo's rerun-on-any-change default — so
+`build.rs` must keep `cargo:rerun-if-changed=recipes`. Without it, adding a
+recipe recompiles nothing and the suite goes green against a binary that does
+not contain it.
 
 ### `arch.pkgbuild` — upstreams that ship a PKGBUILD but never published it
 

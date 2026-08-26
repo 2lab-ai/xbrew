@@ -100,6 +100,12 @@ pub struct RhelSpec {
 pub struct MacSpec {
     /// Homebrew cask name
     pub cask: Option<String>,
+    /// Homebrew formula name, for tools that ship as a formula rather than an
+    /// app bundle. Either a plain name or a fully-qualified `user/tap/formula`
+    /// token, which auto-taps on install. It is data, not a shell word: see
+    /// `resolve::validate_formula_token`, which vets it before brew is ever
+    /// handed the token.
+    pub formula: Option<String>,
     /// Direct .dmg URL (fallback when not in brew)
     pub dmg: Option<String>,
     /// App bundle name inside the dmg, e.g. "Sunshine.app" (needed to uninstall)
@@ -168,6 +174,20 @@ mod tests {
             .collect()
     }
 
+    /// A single built-in by name. Deliberately **not** `get()`/`registry()`:
+    /// those merge `~/.xbrew/recipes/*.toml`, so a developer's local override
+    /// would silently become the thing under test and a shipped-recipe contract
+    /// would pass or fail on machine state. Runtime override behaviour is
+    /// covered separately, against an isolated HOME, in
+    /// `tests/somawork_recipe_contract.rs`.
+    fn builtin(name: &str) -> Recipe {
+        builtins()
+            .into_iter()
+            .map(|(_, r)| r)
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("no built-in recipe named '{name}'"))
+    }
+
     #[test]
     fn builtin_recipes_parse_and_are_named() {
         let all = builtins();
@@ -194,6 +214,7 @@ mod tests {
                 || r.rhel.dnf.is_some()
                 || r.rhel.flatpak.is_some()
                 || r.macos.cask.is_some()
+                || r.macos.formula.is_some()
                 || r.macos.dmg.is_some()
                 || r.script.install.is_some();
             assert!(has_backend, "{path}: no backend on any platform");
@@ -240,9 +261,123 @@ mod tests {
         }
     }
 
+    /// A formula token is passed straight to brew as one argv item, so a
+    /// built-in recipe carrying one that isn't a Homebrew reference would be a
+    /// shipped defect rather than a runtime surprise.
+    #[test]
+    fn builtin_formula_tokens_are_valid_homebrew_references() {
+        for (path, r) in builtins() {
+            if let Some(formula) = &r.macos.formula {
+                crate::resolve::validate_formula_token(formula)
+                    .unwrap_or_else(|e| panic!("{path}: {e:#}"));
+            }
+        }
+    }
+
+    /// Both SomaWork channels install from 2lab-ai's tap and nowhere else.
+    /// macOS ARM64 is v1 scope: no Linux backend, no shell installer.
+    #[test]
+    fn somawork_channels_install_the_tapped_formulae() {
+        for (name, token, channel) in [
+            ("somawork", "2lab-ai/tap/somawork", "production runtime"),
+            (
+                "somawork-preview",
+                "2lab-ai/tap/somawork-preview",
+                "preview runtime",
+            ),
+        ] {
+            let r = builtin(name);
+            assert_eq!(r.macos.formula.as_deref(), Some(token));
+            assert!(
+                r.macos.cask.is_none() && r.macos.dmg.is_none(),
+                "{name}: the formula is the only supported macOS backend"
+            );
+            assert!(
+                r.script.install.is_none(),
+                "{name}: SomaWork installs through Homebrew, never a shell installer"
+            );
+            assert!(
+                r.arch.pacman.is_none()
+                    && r.arch.aur.is_none()
+                    && r.arch.pkgbuild.is_none()
+                    && r.arch.flatpak.is_none()
+                    && r.arch.binary.is_none()
+                    && r.debian.apt.is_none()
+                    && r.debian.flatpak.is_none()
+                    && r.rhel.dnf.is_none()
+                    && r.rhel.flatpak.is_none(),
+                "{name}: macOS ARM64 is v1 scope — do not imply Linux support"
+            );
+            let description = r.description.to_lowercase();
+            assert!(
+                description.contains(channel) && description.contains("controller onboarding"),
+                "{name}: description must name the {channel} and controller onboarding"
+            );
+        }
+    }
+
+    /// Compile and run `build.rs` exactly as cargo would, and return the
+    /// directives it emits. Built fresh into a temp file rather than hunting
+    /// for `target/*/build/xbrew-*/build-script-build`: several of those exist
+    /// at once and the stale ones answer for an older build.rs.
+    fn build_script_directives() -> String {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let binary = std::env::temp_dir().join(format!(
+            "xbrew-build-script-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let compile = std::process::Command::new("rustc")
+            .args(["--edition=2021", "-o"])
+            .arg(&binary)
+            .arg(manifest.join("build.rs"))
+            .output()
+            .expect("compile build.rs with rustc");
+        assert!(
+            compile.status.success(),
+            "build.rs does not compile: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let output = std::process::Command::new(&binary)
+            .current_dir(manifest)
+            .output()
+            .expect("run the compiled build script");
+        let _ = std::fs::remove_file(&binary);
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// `include_dir!` embeds only the files that exist at compile time and
+    /// registers no dependency on the directory itself, so cargo learns about a
+    /// *newly added* recipe only if build.rs asks it to watch `recipes/`.
+    /// Emitting any `rerun-if-*` directive also disables cargo's
+    /// rerun-on-any-package-change default, which is why the directory watch and
+    /// the env watch have to coexist: drop the first and `cargo test` goes green
+    /// against a binary that does not contain the new recipe.
+    #[test]
+    fn the_build_script_makes_cargo_watch_the_recipes_directory() {
+        let stdout = build_script_directives();
+        let emits = |directive: &str| stdout.lines().any(|line| line == directive);
+
+        assert!(
+            emits("cargo:rerun-if-changed=recipes"),
+            "build.rs must make cargo watch recipes/, else a new recipe ships \
+             unembedded behind a green test run. Emitted:\n{stdout}"
+        );
+        assert!(
+            emits("cargo:rerun-if-env-changed=XBREW_BUILD_ID"),
+            "build.rs must still watch XBREW_BUILD_ID. Emitted:\n{stdout}"
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("cargo:rustc-env=XBREW_BUILD_ID=")),
+            "build.rs must still bake a build id. Emitted:\n{stdout}"
+        );
+    }
+
     #[test]
     fn llmux_islands_builds_from_the_upstream_repo() {
-        let r = get("llmux-islands").expect("llmux-islands recipe missing");
+        let r = builtin("llmux-islands");
         assert_eq!(r.arch.pkg.as_deref(), Some("llmux-islands-git"));
         assert_eq!(
             r.arch.dir.as_deref(),
