@@ -105,6 +105,94 @@ shell metacharacters) *before brew is ever handed the token* — the `which brew
 probe that runs first is a fixed literal and never sees it. Casks are not yet
 validated.
 
+#### Tap trust — why a fully-qualified install needs one extra call
+
+Homebrew refuses to load formulae from an untrusted third-party tap. Installing
+`user/tap/formula` grants **implicit trust to that one named formula and to
+nothing else** — Homebrew's `cmd/install.rb` passes only `args.named` to
+`Trust.trust_fully_qualified_items!`, and that helper records a `:formula`
+entry, never the tap. So the install succeeds and then dies on the first
+dependency the formula pulls from its *own* tap: "Refusing to load formula … from
+untrusted tap …". Trusting the tap covers every item in it
+(`Homebrew::Trust.trusted?` short-circuits on `trusted_tap?`).
+
+`brew upgrade` has the identical gap — Homebrew's `cmd/upgrade.rb` also calls
+`Trust.trust_fully_qualified_items!(args.named)` and only then resolves the
+formulae — so both paths carry the trust hop.
+
+Install of a **non-installed fully-qualified** `macos.formula`:
+
+```
+brew list --formula --versions user/tap/formula   # already installed?
+brew trust --tap user/tap                         # ← the fix
+brew install user/tap/formula
+```
+
+Upgrade of a tracked `{ backend = "brew", kind = "formula" }` record whose
+reference is fully-qualified:
+
+```
+brew list --versions user/tap/formula             # installed version
+brew info --json=v2 --formula user/tap/formula    # latest version
+brew trust --tap user/tap                         # ← the fix
+brew upgrade user/tap/formula
+```
+
+The upgrade hop is not redundant with the install hop: **adoption trusts
+nothing**, so every machine that installed one of these formulae before this
+change has a record and an untrusted tap, and its first `xbrew update` is where
+it would otherwise break.
+
+Order is load-bearing (trust after the install/upgrade is too late for the
+dependency it resolves), and the grant is tap-level on purpose: xbrew cannot know
+what a formula requires, so it does not enumerate dependencies. The tap is
+derived from the token's first two components (`resolve::tap_of_formula`) and
+re-checked by `resolve::validate_tap_token` before brew sees it.
+
+Three things are deliberately *not* done:
+
+- **No `brew tap`.** `brew install` already calls `tap&.ensure_installed!` on a
+  fully-qualified name, so tapping first would only duplicate it. (The manifest
+  `trust:` path is different — see below.)
+- **Nothing on adoption.** An already-installed formula resolves no
+  dependencies, so it mutates no trust state. The upgrade hop is what covers
+  those records later.
+- **Plain names and casks are untouched.** A bare name belongs to no tap, and
+  trust scope here is `macos.formula` only.
+
+`brew trust --tap` is best-effort: a Homebrew old enough to lack the `trust`
+subcommand has no trust gate to satisfy either, and a newer one that fails to
+record the grant refuses the install a moment later with its own instructions.
+Failing hard would break the first case to warn about the second. The warning
+names the tap, so a user on a Homebrew that *does* enforce trust knows what to
+run by hand. An unusable *tap token* is still a hard error — best-effort covers
+the subprocess, not the validation.
+
+#### Known gaps in tap trust
+
+Both are real and neither is fixed here; do not assume otherwise from the above.
+
+- **Casks.** `trusted?` treats casks identically (`trustedcasks` in
+  `trust.json`), so a fully-qualified cask with a same-tap dependency hits the
+  same refusal. The cask path gets no trust call — and no
+  `validate_formula_token` either, which was already true before this change.
+- **The no-recipe fallback takes a user-typed token.** When no recipe matches,
+  `install_macos` passes the name **straight from argv** to `brew_provides` and
+  `brew_install`. That name is not restricted to bare names: `xbrew install
+  vendor/tap/thing` runs `brew info --formula vendor/tap/thing` then `brew
+  install vendor/tap/thing`, records it as a formula, and trusts nothing — it
+  routes around both `validate_formula_token` and the tap trust. (Measured, not
+  inferred.) Its *upgrade* is covered, because `upgrade` derives the tap from
+  the recorded reference like any other formula record.
+
+`xbrew bundle`'s manifest `trust:` list needs **both** calls — `brew tap <tap>`
+*and* `brew trust --tap <tap>`, in that order, before any entry is installed.
+Tapping is what makes a plain formula name from that tap resolve at all;
+trusting is what lets Homebrew load it. This path used to run only `brew tap`,
+which read like trust and wasn't. Each declared tap is validated up front, so a
+manifest that can't express a tap fails closed instead of installing its entries
+against whatever did register.
+
 An Arch-only prebuilt executable can instead use `[arch.binary]` with a safe
 `name` and required `aarch64`/`x86_64` HTTPS URL + SHA-256 tables. xbrew
 verifies the selected immutable asset before atomically installing it under

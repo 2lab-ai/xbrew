@@ -278,23 +278,83 @@ pub fn validate_formula_token(token: &str) -> Result<()> {
         return Err(reject("expected either `formula` or `user/tap/formula`"));
     }
     for part in parts {
-        if part.is_empty() {
-            return Err(reject("empty name component"));
+        if let Some(why) = reference_component_fault(part) {
+            return Err(reject(why));
         }
-        if part.starts_with('-') {
-            return Err(reject("a leading dash would be read as a brew flag"));
+    }
+    Ok(())
+}
+
+/// A tap reference is `user/tap` — the same per-component grammar as a formula,
+/// one component shorter. Checked before `brew tap`/`brew trust` is handed the
+/// token, for the same reason `validate_formula_token` exists: manifest `trust:`
+/// entries are user data, and `- --force` must not arrive as a brew flag.
+pub fn validate_tap_token(token: &str) -> Result<()> {
+    let reject = |why: &str| anyhow!("invalid Homebrew tap token '{token}': {why}");
+    let parts: Vec<&str> = token.split('/').collect();
+    if parts.len() != 2 {
+        return Err(reject("expected `user/tap`"));
+    }
+    for part in parts {
+        if let Some(why) = reference_component_fault(part) {
+            return Err(reject(why));
         }
-        if part.starts_with('.') {
-            return Err(reject("name components may not start with a dot"));
-        }
-        if !part
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.+@".contains(&byte))
-        {
-            return Err(reject(
-                "only letters, digits and the characters -_.+@ are allowed",
-            ));
-        }
+    }
+    Ok(())
+}
+
+/// The tap that owns a fully-qualified formula token: its first two components.
+/// `None` for a plain (core/already-tapped) name, which belongs to no tap and
+/// so grants nothing to trust.
+pub fn tap_of_formula(token: &str) -> Option<String> {
+    match token.split('/').collect::<Vec<&str>>()[..] {
+        [user, tap, _formula] => Some(format!("{user}/{tap}")),
+        _ => None,
+    }
+}
+
+/// Why this component is not a usable piece of a Homebrew reference, or `None`
+/// when it is. Shared by the formula and tap validators so the two can never
+/// drift apart.
+fn reference_component_fault(part: &str) -> Option<&'static str> {
+    if part.is_empty() {
+        return Some("empty name component");
+    }
+    if part.starts_with('-') {
+        return Some("a leading dash would be read as a brew flag");
+    }
+    if part.starts_with('.') {
+        return Some("name components may not start with a dot");
+    }
+    if !part
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.+@".contains(&byte))
+    {
+        return Some("only letters, digits and the characters -_.+@ are allowed");
+    }
+    None
+}
+
+/// Trust a tap so Homebrew will load *everything* in it, not just the one item
+/// we name.
+///
+/// `brew install user/tap/formula` grants implicit trust to that single named
+/// formula and to nothing else (Homebrew `cmd/install.rb` passes only
+/// `args.named` to `Trust.trust_fully_qualified_items!`), so the first
+/// dependency the formula pulls from its own tap is refused — "Refusing to load
+/// formula … from untrusted tap …". Trusting the tap covers every item in it
+/// (`Homebrew::Trust.trusted?` short-circuits on `trusted_tap?`), which is why
+/// this is a tap-level grant and not an enumeration of dependencies: xbrew
+/// cannot know what a formula requires, and shouldn't have to.
+///
+/// Best effort on purpose: a Homebrew old enough to have no `trust` subcommand
+/// has no trust gate to satisfy either, and a newer one that fails to record
+/// the grant will refuse the install a moment later with its own instructions.
+/// Failing hard here would break the first case to warn about the second.
+fn brew_trust_tap(tap: &str) -> Result<()> {
+    validate_tap_token(tap)?;
+    if let Err(e) = util::run("brew", &["trust", "--tap", tap]) {
+        eprintln!("\x1b[33m! brew trust --tap {tap} failed: {e:#}\x1b[0m");
     }
     Ok(())
 }
@@ -330,8 +390,21 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
                     bail!("'{name}' installs as a Homebrew formula, but brew isn't installed. Run `xbrew install brew` first.");
                 }
                 if brew_installed(formula, "formula") {
+                    // Nothing is installed and no dependency is resolved, so
+                    // there is nothing to trust for — leave the trust store
+                    // alone.
                     report_adopted(name, formula);
                 } else {
+                    // Trust the tap *before* the install, because the install
+                    // is what resolves the dependencies that implicit
+                    // per-formula trust would refuse. No `brew tap` here:
+                    // `brew install` already calls `tap&.ensure_installed!` for
+                    // a fully-qualified name, so tapping would only duplicate
+                    // it (the manifest `trust:` path does need it — see
+                    // `bundle` — because plain names have no tap to install).
+                    if let Some(tap) = tap_of_formula(formula) {
+                        brew_trust_tap(&tap)?;
+                    }
                     brew_install(formula, "formula")?;
                 }
                 // Recorded like any other brew formula, so uninstall/update/
@@ -598,6 +671,13 @@ pub fn bundle(files: &[PathBuf]) -> Result<()> {
     }
 
     // Register trusted taps first — brew itself is just another xbrew package.
+    // Every declared tap is checked before anything runs, so a manifest that
+    // can't express a tap fails closed instead of installing its entries
+    // against whatever did register.
+    for t in &trust {
+        validate_tap_token(t)
+            .with_context(|| format!("manifest declares an unusable tap '{t}'"))?;
+    }
     if !trust.is_empty() {
         if !util::which("brew") {
             println!("\n\x1b[1m── ensuring Homebrew (needed for trusted taps) ──\x1b[0m");
@@ -605,9 +685,15 @@ pub fn bundle(files: &[PathBuf]) -> Result<()> {
         }
         for t in &trust {
             println!("trust tap: {t}");
+            // Two distinct things, both needed: `brew tap` clones the tap so a
+            // plain formula name declared in this manifest resolves at all,
+            // and `brew trust --tap` lets Homebrew actually load what it finds
+            // there. Tapping without trusting is what made this path
+            // misleading before — it looked like trust and wasn't.
             if let Err(e) = util::run("brew", &["tap", t]) {
                 eprintln!("\x1b[33m! brew tap {t} failed: {e:#}\x1b[0m");
             }
+            brew_trust_tap(t)?;
         }
     }
 
@@ -836,6 +922,17 @@ fn upgrade(name: &str) -> Result<()> {
             if rec.kind.as_deref() == Some("cask") {
                 util::run("brew", &["upgrade", "--cask", &rec.reference])
             } else {
+                // `brew upgrade` has the same named-only trust as `brew
+                // install` — Homebrew `cmd/upgrade.rb` calls
+                // `Trust.trust_fully_qualified_items!` on `args.named` and
+                // only then resolves the formulae — so an upgrade that pulls
+                // in a new same-tap dependency is refused unless the tap is
+                // trusted. This also repairs machines that adopted the formula
+                // before any of this existed: adoption trusts nothing, so the
+                // first upgrade is where they would otherwise break.
+                if let Some(tap) = tap_of_formula(&rec.reference) {
+                    brew_trust_tap(&tap)?;
+                }
                 util::run("brew", &["upgrade", &rec.reference])
             }
         }
@@ -1506,6 +1603,69 @@ mod tests {
                 validate_formula_token(token).is_err(),
                 "{token:?} must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn a_tap_is_the_first_two_components_of_a_fully_qualified_formula() {
+        assert_eq!(
+            tap_of_formula("2lab-ai/tap/somawork-preview").as_deref(),
+            Some("2lab-ai/tap")
+        );
+        assert_eq!(
+            tap_of_formula("stablyai/orca/orca").as_deref(),
+            Some("stablyai/orca")
+        );
+        // A plain name belongs to no tap, so there is nothing to trust.
+        assert_eq!(tap_of_formula("somawork"), None);
+        assert_eq!(tap_of_formula("node@20"), None);
+    }
+
+    /// Every tap derived from a token that `validate_formula_token` accepted is
+    /// itself a valid tap token — so the install path can never hand brew a tap
+    /// it did not check.
+    #[test]
+    fn a_tap_derived_from_an_accepted_formula_is_itself_valid() {
+        for token in [
+            "2lab-ai/tap/somawork",
+            "2lab-ai/tap/somawork-preview",
+            "stablyai/orca/orca",
+            "vendor/brews/cli",
+        ] {
+            validate_formula_token(token).expect("token should be accepted");
+            let tap = tap_of_formula(token).expect("fully-qualified token has a tap");
+            validate_tap_token(&tap)
+                .unwrap_or_else(|e| panic!("tap {tap} derived from {token} was rejected: {e:#}"));
+        }
+    }
+
+    #[test]
+    fn tap_tokens_accept_only_user_slash_tap() {
+        for tap in [
+            "2lab-ai/tap",
+            "homebrew/core",
+            "oven-sh/bun",
+            "vendor/brews",
+        ] {
+            validate_tap_token(tap).unwrap_or_else(|e| panic!("{tap} should be accepted: {e:#}"));
+        }
+        for tap in [
+            "",
+            "   ",
+            "2lab-ai",
+            "2lab-ai/tap/somawork",
+            "2lab-ai/",
+            "/tap",
+            "2lab-ai//tap",
+            "--force",
+            "2lab-ai/-tap",
+            "-2lab-ai/tap",
+            "2lab-ai/.",
+            "2lab-ai/tap extra",
+            "2lab-ai/tap;id",
+            "$(id)/tap",
+        ] {
+            assert!(validate_tap_token(tap).is_err(), "{tap:?} must be rejected");
         }
     }
 
