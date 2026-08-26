@@ -100,6 +100,38 @@ fn somawork_descriptions_name_their_channel_and_the_onboarding_role() {
     }
 }
 
+/// The Homebrew bootstrap runs `recipes/brew.toml` rather than carrying its own
+/// copy of the installer command, so the one thing that ever curl|bashes
+/// Homebrew stays reviewable in one file — and a test can stub it out by name.
+#[test]
+fn the_brew_recipe_is_the_only_home_of_the_installer() {
+    let brew = recipe("brew.toml");
+    assert_eq!(
+        brew["script"]["provides_bin"].as_str(),
+        Some("brew"),
+        "brew.toml: the bootstrap probes PATH for this binary"
+    );
+    let install = brew["script"]["install"]
+        .as_str()
+        .expect("brew.toml: script.install must be a string");
+    assert!(
+        install.contains("Homebrew/install"),
+        "brew.toml must own the official installer, got: {install}"
+    );
+
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("resolve.rs"),
+    )
+    .expect("read src/resolve.rs");
+    assert!(
+        !source.contains("Homebrew/install"),
+        "resolve.rs must bootstrap through the 'brew' recipe, not a second copy \
+         of the installer command"
+    );
+}
+
 /// The `macos.formula` backend only runs on macOS, so its lifecycle receipts
 /// are collected there. Everything above is platform-independent recipe data.
 #[cfg(target_os = "macos")]
@@ -238,6 +270,18 @@ esac
 exit 0
 "#;
 
+    /// What the sandbox's stand-in for the Homebrew installer does when the
+    /// bootstrap runs it.
+    enum Bootstrap {
+        /// Installs Homebrew: the fake brew lands on the bootstrap PATH.
+        Succeeds,
+        /// The installer itself fails (no network, a declined prompt, …).
+        Fails,
+        /// Exits 0 but leaves no `brew` on PATH — an installer that "worked"
+        /// into a prefix this shell's PATH does not carry.
+        LeavesNothingOnPath,
+    }
+
     struct Sandbox {
         root: PathBuf,
         /// Extra environment for the fake brew — which Homebrew generation this
@@ -262,7 +306,7 @@ exit 0
                 std::process::id(),
             ));
             let _ = fs::remove_dir_all(&root);
-            for directory in ["home/.xbrew/recipes", "bin", "brew-state"] {
+            for directory in ["home/.xbrew/recipes", "bin", "bootstrap-bin", "brew-state"] {
                 fs::create_dir_all(root.join(directory)).expect("create sandbox directory");
             }
             let brew = root.join("bin/brew");
@@ -278,6 +322,60 @@ exit 0
         /// Point the fake at a different Homebrew generation (see `FAKE_BREW`).
         fn brew_env(&mut self, key: &str, value: &str) {
             self.brew_env.push((key.to_string(), value.to_string()));
+        }
+
+        /// The one PATH directory a bootstrap installer can write into. Empty
+        /// until an installer drops a `brew` in it, which is how "Homebrew
+        /// became discoverable *because* the installer ran" is observed rather
+        /// than assumed.
+        fn bootstrap_bin(&self) -> PathBuf {
+            self.root.join("bootstrap-bin")
+        }
+
+        fn bootstrap_log(&self) -> PathBuf {
+            self.root.join("bootstrap.log")
+        }
+
+        /// Override the built-in `brew` recipe with one whose installer is a
+        /// local script instead of curl|bash: it records every run and, when
+        /// the bootstrap succeeds, drops the fake brew onto the bootstrap PATH.
+        /// The real recipe's installer must never run in a test — that
+        /// `recipes/brew.toml` is still the single home of it is pinned
+        /// separately by `the_brew_recipe_is_the_only_home_of_the_installer`.
+        fn brew_bootstrap(&self, outcome: Bootstrap) {
+            let script = self.root.join("bootstrap-installer.sh");
+            let action = match outcome {
+                Bootstrap::Succeeds => format!(
+                    "cp '{}' '{}'\nexit 0\n",
+                    self.root.join("bin/brew").display(),
+                    self.bootstrap_bin().join("brew").display()
+                ),
+                Bootstrap::Fails => "printf 'installer exploded\\n' >&2\nexit 3\n".to_string(),
+                Bootstrap::LeavesNothingOnPath => "exit 0\n".to_string(),
+            };
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nprintf 'ran\\n' >>'{}'\n{action}",
+                    self.bootstrap_log().display()
+                ),
+            )
+            .expect("write bootstrap installer");
+            self.user_recipe(
+                "brew",
+                &format!(
+                    "[script]\nprovides_bin = \"brew\"\ninstall = \"sh {}\"\n",
+                    script.display()
+                ),
+            );
+        }
+
+        /// How many times the bootstrap installer ran.
+        fn bootstrap_runs(&self) -> usize {
+            fs::read_to_string(self.bootstrap_log())
+                .unwrap_or_default()
+                .lines()
+                .count()
         }
 
         fn home(&self) -> PathBuf {
@@ -378,9 +476,15 @@ exit 0
             )
         }
 
-        /// Run the real binary with no brew anywhere on PATH.
-        fn xbrew_without_brew(&self, arguments: &[&str]) -> Output {
-            self.spawn(arguments, "", "/usr/bin:/bin")
+        /// Run the real binary with no brew anywhere on PATH, but with one
+        /// writable PATH directory a bootstrap installer can put it in — a
+        /// fresh Mac, where Homebrew is missing and installable.
+        fn xbrew_bootstrapping(&self, arguments: &[&str]) -> Output {
+            self.spawn(
+                arguments,
+                "",
+                &format!("{}:/usr/bin:/bin", self.bootstrap_bin().display()),
+            )
         }
 
         fn spawn(&self, arguments: &[&str], answers: &str, path: &str) -> Output {
@@ -1139,17 +1243,200 @@ exit 0
         );
     }
 
+    /// The bug this replaces a refusal with: a fresh Mac with no Homebrew met
+    /// "Run `xbrew install brew` first" for a recipe xbrew already knows how to
+    /// install. Homebrew is a *dependency* of the formula backend, so xbrew
+    /// installs it through the very `brew` recipe `xbrew install brew` runs —
+    /// exactly once — and then carries on with the formula it was asked for.
     #[test]
-    fn a_formula_recipe_refuses_to_proceed_without_homebrew() {
-        let sandbox = Sandbox::new("no-brew");
-        let output = sandbox.xbrew_without_brew(&["install", "somawork"]);
-        assert!(!output.status.success(), "install should have failed");
+    fn a_formula_recipe_bootstraps_homebrew_and_then_installs() {
+        let sandbox = Sandbox::new("bootstrap-formula");
+        sandbox.brew_bootstrap(Bootstrap::Succeeds);
+
+        let output = sandbox.xbrew_bootstrapping(&["install", "somawork"]);
         assert!(
-            stderr(&output).contains("installs as a Homebrew formula"),
-            "expected the formula backend to name its Homebrew requirement, got: {}",
+            output.status.success(),
+            "install failed: {}",
             stderr(&output)
         );
+        assert_eq!(
+            sandbox.bootstrap_runs(),
+            1,
+            "Homebrew must be installed exactly once"
+        );
+        // The formula path is unchanged afterwards, trust hop and all — the
+        // bootstrap adds a step in front of it, it does not replace it.
+        assert_calls(
+            &sandbox,
+            &[
+                &["brew", "list", "--formula", "--versions", STABLE_TOKEN],
+                &["brew", "trust", "--tap", "2lab-ai/tap"],
+                &["brew", "install", STABLE_TOKEN],
+            ],
+        );
+        assert_eq!(
+            sandbox.record("somawork"),
+            Some(formula_record(STABLE_TOKEN))
+        );
+        assert!(sandbox.is_installed(STABLE_TOKEN));
+        // An implicit dependency is not a package the user asked for: recording
+        // it would make `xbrew uninstall brew` an offer xbrew never made, and
+        // would claim ownership of a Homebrew the user may already manage.
+        assert_eq!(
+            sandbox.record("brew"),
+            None,
+            "the bootstrap must not record brew as a requested package"
+        );
+    }
+
+    /// The bootstrap is conditional on the dependency actually being missing.
+    #[test]
+    fn an_existing_homebrew_is_never_bootstrapped_over() {
+        let sandbox = Sandbox::new("bootstrap-skip");
+        sandbox.brew_bootstrap(Bootstrap::Succeeds);
+
+        let output = sandbox.xbrew(&["install", "somawork"]);
+        assert!(
+            output.status.success(),
+            "install failed: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            sandbox.bootstrap_runs(),
+            0,
+            "brew was already on PATH — running its installer would re-install \
+             (or damage) a Homebrew the user already has"
+        );
+        assert_calls(
+            &sandbox,
+            &[
+                &["brew", "list", "--formula", "--versions", STABLE_TOKEN],
+                &["brew", "trust", "--tap", "2lab-ai/tap"],
+                &["brew", "install", STABLE_TOKEN],
+            ],
+        );
+    }
+
+    /// A bootstrap that fails is the end of the install, not a warning: there
+    /// is no brew to fall through to, and the error has to name the real cause
+    /// rather than the missing dependency it was already trying to fix.
+    #[test]
+    fn a_failing_homebrew_bootstrap_stops_the_install() {
+        let sandbox = Sandbox::new("bootstrap-fails");
+        sandbox.brew_bootstrap(Bootstrap::Fails);
+
+        let output = sandbox.xbrew_bootstrapping(&["install", "somawork"]);
+        assert!(!output.status.success(), "install should have failed");
+        assert!(
+            stderr(&output).contains("Homebrew"),
+            "the error must name the failed bootstrap, got: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            sandbox.bootstrap_runs(),
+            1,
+            "a failed installer must not be retried"
+        );
+        assert_eq!(
+            sandbox.calls(),
+            Vec::<Vec<String>>::new(),
+            "there is no brew to call after a failed bootstrap"
+        );
         assert_eq!(sandbox.record("somawork"), None);
+    }
+
+    /// Homebrew's installer can exit 0 into a prefix the current shell's PATH
+    /// does not carry. Exit status is not the receipt — `brew` being reachable
+    /// is — so xbrew re-probes and stops with an instruction the user can act
+    /// on, instead of running the formula path into a "command not found".
+    #[test]
+    fn a_bootstrap_that_leaves_no_brew_on_path_is_not_taken_as_success() {
+        let sandbox = Sandbox::new("bootstrap-silent");
+        sandbox.brew_bootstrap(Bootstrap::LeavesNothingOnPath);
+
+        let output = sandbox.xbrew_bootstrapping(&["install", "somawork"]);
+        assert!(!output.status.success(), "install should have failed");
+        assert!(
+            stderr(&output).contains("PATH"),
+            "the error must point at PATH, got: {}",
+            stderr(&output)
+        );
+        assert_eq!(sandbox.bootstrap_runs(), 1);
+        assert_eq!(
+            sandbox.calls(),
+            Vec::<Vec<String>>::new(),
+            "brew was never reachable, so it was never called"
+        );
+        assert_eq!(sandbox.record("somawork"), None);
+    }
+
+    /// Casks need Homebrew for the same reason and get the same bootstrap (one
+    /// helper, both branches) — and it must not have dragged the formula path's
+    /// trust hop onto the cask path with it.
+    #[test]
+    fn a_cask_recipe_bootstraps_homebrew_the_same_way() {
+        let sandbox = Sandbox::new("bootstrap-cask");
+        sandbox.brew_bootstrap(Bootstrap::Succeeds);
+        sandbox.user_recipe("cask-only", "[macos]\ncask = \"vendor/tap/app\"\n");
+
+        let output = sandbox.xbrew_bootstrapping(&["install", "cask-only"]);
+        assert!(
+            output.status.success(),
+            "install failed: {}",
+            stderr(&output)
+        );
+        assert_eq!(sandbox.bootstrap_runs(), 1);
+        assert_calls(
+            &sandbox,
+            &[
+                &["brew", "list", "--cask", "--versions", "vendor/tap/app"],
+                &["brew", "install", "--cask", "vendor/tap/app"],
+            ],
+        );
+        assert!(
+            sandbox.trusted_taps().is_empty(),
+            "the cask path must not have grown a trust step: {:?}",
+            sandbox.trusted_taps()
+        );
+        assert_eq!(
+            sandbox.record("cask-only"),
+            Some(serde_json::json!({
+                "backend": "brew",
+                "reference": "vendor/tap/app",
+                "kind": "cask",
+            }))
+        );
+        assert_eq!(sandbox.record("brew"), None);
+    }
+
+    /// Validation stays in front of the bootstrap. A token that is not a
+    /// Homebrew reference must not be able to trigger a Homebrew install — the
+    /// installer is a shell script, and a token that got that far would have
+    /// bought itself a whole new process tree to be mishandled by.
+    #[test]
+    fn an_invalid_formula_token_is_refused_before_homebrew_is_bootstrapped() {
+        let sandbox = Sandbox::new("bootstrap-invalid");
+        sandbox.brew_bootstrap(Bootstrap::Succeeds);
+        let canary = sandbox.canary();
+        let token = format!("somawork;touch {}", canary.display());
+        sandbox.user_recipe(
+            "hostile-no-brew",
+            &format!("[macos]\nformula = \"{}\"\n", toml_escape(&token)),
+        );
+
+        let output = sandbox.xbrew_bootstrapping(&["install", "hostile-no-brew"]);
+        assert!(!output.status.success(), "install should have failed");
+        assert_eq!(
+            sandbox.bootstrap_runs(),
+            0,
+            "an unusable token must not buy itself a Homebrew install"
+        );
+        assert_eq!(sandbox.calls(), Vec::<Vec<String>>::new());
+        assert!(
+            !canary.exists(),
+            "the token executed its payload — the canary was created"
+        );
+        assert_eq!(sandbox.record("hostile-no-brew"), None);
     }
 
     /// Tokens that are not Homebrew references must be refused as *data*,

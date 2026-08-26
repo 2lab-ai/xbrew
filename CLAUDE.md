@@ -105,6 +105,22 @@ shell metacharacters) *before brew is ever handed the token* — the `which brew
 probe that runs first is a fixed literal and never sees it. Casks are not yet
 validated.
 
+#### Homebrew is bootstrapped, not demanded
+
+A recipe that declares `macos.cask`/`macos.formula` names Homebrew as its
+backend, so on a machine without brew that is a **dependency to resolve**, not a
+refusal: `resolve::ensure_brew` runs the `recipes/brew.toml` installer (via
+`recipe::get("brew")` — the installer command exists in exactly one place) and
+then re-probes PATH, because Homebrew's installer can exit 0 into a prefix this
+shell doesn't carry. It runs only when `brew` is genuinely absent, only *after*
+`validate_formula_token`, and its record is dropped: an implicit dependency is
+not a package the user asked for, so `state.json` gains no `brew` entry —
+`xbrew install brew` is still how xbrew comes to own Homebrew itself.
+
+Names with **no recipe** keep the old refusal: nothing declared Homebrew as
+their backend, so installing a package manager to look up a name that may not
+exist isn't what was asked.
+
 #### Tap trust — why a fully-qualified install needs one extra call
 
 Homebrew refuses to load formulae from an untrusted third-party tap. Installing

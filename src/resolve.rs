@@ -359,17 +359,51 @@ fn brew_trust_tap(tap: &str) -> Result<()> {
     Ok(())
 }
 
+/// Install Homebrew because something else needs it, using the same
+/// `recipes/brew.toml` installer `xbrew install brew` runs — never a second
+/// copy of that command. A recipe that declares a cask or a formula names
+/// Homebrew as its backend, so a missing brew is a *dependency* to resolve, not
+/// a reason to hand the user a command they already asked xbrew to run.
+///
+/// Called only after the recipe's token has been validated, so no
+/// attacker-controlled string can buy itself a shell installer, and only when
+/// `brew` is genuinely absent — re-running Homebrew's installer over an
+/// existing install is not xbrew's to do.
+///
+/// The resulting `Record` is deliberately dropped: `install()` records what the
+/// user asked for, and an implicit dependency is not that. `xbrew install brew`
+/// remains the way to have xbrew own (and later uninstall) Homebrew itself.
+fn ensure_brew(name: &str, backend: &str) -> Result<()> {
+    if util::which("brew") {
+        return Ok(());
+    }
+    let need = format!("'{name}' installs as a Homebrew {backend}, but brew isn't installed");
+    let brew = recipe::get("brew")
+        .ok_or_else(|| anyhow!("{need}, and no 'brew' recipe is available to install it."))?;
+    println!("… '{name}' needs Homebrew — installing Homebrew first.");
+    recipe_script_install("brew", &brew)
+        .ok_or_else(|| anyhow!("{need}, and the 'brew' recipe carries no installer."))?
+        .with_context(|| format!("{need}, and installing Homebrew for it failed"))?;
+    // Exit 0 is not the receipt — a reachable `brew` is. Homebrew's installer
+    // can succeed into a prefix this shell's PATH does not carry, and the
+    // backend that follows would then die on a missing command instead.
+    if !util::which("brew") {
+        bail!(
+            "Homebrew's installer finished but `brew` is still not on PATH. \
+             Add Homebrew's bin directory to PATH (or open a new shell), then \
+             re-run `xbrew install {name}`."
+        );
+    }
+    Ok(())
+}
+
 /// macOS: a curated recipe is authoritative when it declares a macOS/script
 /// backend; only names with no such recipe fall back to generic Homebrew.
 fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
-    let has_brew = util::which("brew");
-
     if let Some(r) = recipe {
         match macos_backend(r) {
             Some(MacBackend::Cask(cask)) => {
-                if !has_brew {
-                    bail!("'{name}' installs as a Homebrew cask, but brew isn't installed. Run `xbrew install brew` first.");
-                }
+                ensure_brew(name, "cask")?;
                 if brew_installed(cask, "cask") {
                     report_adopted(name, cask);
                 } else {
@@ -386,9 +420,7 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
                 validate_formula_token(formula).with_context(|| {
                     format!("recipe '{name}' declares an unusable macOS formula")
                 })?;
-                if !has_brew {
-                    bail!("'{name}' installs as a Homebrew formula, but brew isn't installed. Run `xbrew install brew` first.");
-                }
+                ensure_brew(name, "formula")?;
                 if brew_installed(formula, "formula") {
                     // Nothing is installed and no dependency is resolved, so
                     // there is nothing to trust for — leave the trust store
@@ -441,7 +473,10 @@ fn install_macos(name: &str, recipe: Option<&Recipe>) -> Result<Record> {
         }
     }
 
-    if has_brew {
+    // No recipe: nothing declared Homebrew as this package's backend, so a
+    // missing brew is not a dependency to resolve — installing a package
+    // manager to look up a name that may not exist is not what was asked.
+    if util::which("brew") {
         if let Some(kind) = brew_provides(name) {
             if brew_installed(name, &kind) {
                 report_adopted(name, name);
