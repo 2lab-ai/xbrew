@@ -101,9 +101,93 @@ version route through the same generic brew paths a native formula does. The
 token is data handed to `brew` as exactly one argv item and never through a
 shell: `resolve::validate_formula_token` rejects anything outside Homebrew's
 grammar (whitespace, a leading dash, `.`/`..`, extra or empty path components,
-shell metacharacters) *before brew is ever handed the token* — the `which brew`
-probe that runs first is a fixed literal and never sees it. Casks are not yet
-validated.
+shell metacharacters) *before brew is ever handed the token* — and, on the
+formula and cask recipe paths, before the Homebrew bootstrap and the PATH probe
+it opens with, so an unusable token buys no subprocess at all. `macos.cask` tokens
+get `resolve::validate_cask_token`, which is the *same* function body under a
+second name (`validate_reference_token`), so a cask can never be allowed
+something a formula is not.
+
+#### Homebrew is bootstrapped, not demanded
+
+A recipe that declares `macos.cask`/`macos.formula` names Homebrew as its
+backend, so on a machine without brew that is a **dependency to resolve**, not a
+refusal: `resolve::ensure_brew` runs the `recipes/brew.toml` installer (via
+`recipe::builtin("brew")` — the installer command exists in exactly one place)
+and then looks for what it produced. It runs only when `brew` is genuinely
+unreachable, only *after* the recipe's cask/formula token has been validated,
+and its record is dropped: an implicit dependency is not a package the user
+asked for, so `state.json` gains no `brew` entry — `xbrew install brew` is still
+how xbrew comes to own Homebrew itself.
+
+Three things make that sentence load-bearing rather than decorative:
+
+- **The built-in recipe, not the user's.** `recipe::builtin` skips
+  `~/.xbrew/recipes` entirely. `recipe::get` merges user recipes over built-ins,
+  so with it, asking for an unrelated *formula* would execute whatever anything
+  able to write the user's home had left in `~/.xbrew/recipes/brew.toml`. An
+  override is a choice about a package you asked for, not a licence to run
+  during someone else's install — so explicit `xbrew install brew` still goes
+  through `get()` and still honours an override.
+- **Reachable ≠ `command -v brew`.** `resolve::brew_reachable` probes PATH, then
+  the prefixes in order: `$HOMEBREW_PREFIX/bin/brew` when that variable is set,
+  then `/opt/homebrew/bin/brew`, then `/usr/local/bin/brew`, duplicates
+  collapsed. The declared prefix goes **first, not instead** — first hit wins, so
+  a correct `HOMEBREW_PREFIX` is still the only path ever examined, while a stale
+  one (a prefix that moved or was removed) falls through instead of reporting a
+  Homebrew-bearing machine as brew-less. A candidate counts only as a regular
+  executable file, and its verified parent directory is prepended to the current
+  process's PATH — a **process-global** change every later child inherits, so
+  that directory gains ordinary PATH precedence for *all* subsequent commands,
+  not only `brew`. That is a trust decision about the discovered prefix, and the
+  same trust that running its `brew` already implies (brew executes that
+  prefix's own Ruby and formula code); what the prepend widens is the scope, not
+  the trust. This runs **both** before deciding to install and again
+  after the installer returns, which covers the two real conditions: Homebrew's
+  installer exits 0 into a prefix the already-running process's PATH does not
+  carry, and `/opt/homebrew/bin/brew` is off-PATH in any process whose
+  environment never went through `brew shellenv`. In the second case the
+  bootstrap must run **zero** times — the Homebrew is adopted, not re-installed
+  over. `resolve::brew_present` is the single answer every macOS
+  brew-presence decision shares, so no two of them can disagree about whether
+  this machine has Homebrew: the `provides_bin` adoption check (`xbrew install
+  brew` adopts an off-PATH Homebrew instead of reinstalling), the no-recipe
+  fallback (which used to demand `xbrew install brew` on a machine that had it),
+  `bundle`'s trust gate, and `search`'s `== brew ==` section (which a plain PATH
+  probe dropped *silently* — no error, just a shorter answer). Scoped to macOS:
+  off macOS `brew_present` is a plain `which`, and `provides_bin` for every
+  binary other than `brew` always was.
+
+  What deliberately does **not** ask, and is the remaining PATH-blind spot:
+  `uninstall`, `upgrade` and `version::installed`/`latest_available` invoke
+  `brew` directly with no presence gate at all, so on a Mac whose Homebrew is
+  off-PATH they fail with ``failed to launch `brew` `` rather than discovering
+  it. That is a different shape of bug — a missing call, not a wrong gate — and
+  it is untouched here.
+
+  Because those two fallbacks are absolute paths that no env var can redirect,
+  the lifecycle tests launch xbrew through `sandbox-exec` with a profile that
+  denies reads of them (`HIDE_HOST_HOMEBREW`). Without it, every "brew was not
+  found" test on a Mac that *has* Homebrew would adopt the real one and go on to
+  run `brew install` for real. The denial is measured, not assumed, by
+  `the_seatbelt_profile_actually_hides_the_host_homebrew`.
+- **At most one attempt per invocation.** A `BrewBootstrap`
+  (`NotAttempted | Succeeded | Failed(String)`) is threaded `install_many →
+  install → install_macos → ensure_brew`. `bundle` shares one too, and its
+  `trust:` gate acquires brew through the *same* `ensure_brew_for` rather than an
+  explicit `install("brew")` — that route left the context untouched, so the
+  manifest's first brew-backed entry would install Homebrew a second time (and
+  the gate would honour a user override for a dependency nobody asked for). A
+  second brew-backed name on the same command line reuses the first attempt's
+  outcome
+  — the failure is cached as its *rendered* chain, so package two reports `sh`
+  exited with `exit status: 3` rather than a fresh, uninformative "brew isn't
+  installed". Invocation-local by hand rather than a static, which would leak
+  across tests and library calls.
+
+Names with **no recipe** keep the old refusal: nothing declared Homebrew as
+their backend, so installing a package manager to look up a name that may not
+exist isn't what was asked.
 
 #### Tap trust — why a fully-qualified install needs one extra call
 
@@ -174,8 +258,9 @@ Both are real and neither is fixed here; do not assume otherwise from the above.
 
 - **Casks.** `trusted?` treats casks identically (`trustedcasks` in
   `trust.json`), so a fully-qualified cask with a same-tap dependency hits the
-  same refusal. The cask path gets no trust call — and no
-  `validate_formula_token` either, which was already true before this change.
+  same refusal. The cask path gets no trust call. (Token *validation* it now has
+  — `validate_cask_token`, before the bootstrap and before brew — so this gap is
+  the tap grant alone.)
 - **The no-recipe fallback takes a user-typed token.** When no recipe matches,
   `install_macos` passes the name **straight from argv** to `brew_provides` and
   `brew_install`. That name is not restricted to bare names: `xbrew install
