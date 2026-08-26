@@ -72,8 +72,9 @@ xbrew self-update
 
 `xbrew bundle` installs everything declared in one or more YAML manifests —
 merged in order (e.g. a common file + a per-OS file), duplicates collapsed. It
-registers `trust:` taps first (so brew-backed formulae resolve), installs each
-`xbrew:` entry, and verifies optional version constraints.
+registers `trust:` taps first — `brew tap` so their formulae resolve *and*
+`brew trust --tap` so Homebrew will load them — installs each `xbrew:` entry,
+and verifies optional version constraints.
 
 ```yaml
 trust:
