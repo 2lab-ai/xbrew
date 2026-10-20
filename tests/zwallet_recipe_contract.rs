@@ -85,7 +85,8 @@ fn zwallet_installs_the_tap_formula_on_macos_and_nothing_on_debian_or_rhel() {
 /// The crate is binary-only, so the embedded registry is reached the way a user
 /// reaches it: the real `xbrew info`. `registry()` silently drops a recipe that
 /// does not parse as `Recipe`, so "recipe:  yes" is the receipt that the file
-/// was embedded and parsed strictly. HOME is a fresh directory so a developer's
+/// was embedded and parsed (`Recipe` ignores unknown keys; the raw-TOML tests
+/// above catch a misspelled one). HOME is a fresh directory so a developer's
 /// own `~/.xbrew/recipes/zwallet.toml` cannot answer instead of the built-in.
 #[test]
 fn zwallet_is_a_built_in_recipe_of_the_xbrew_binary() {
