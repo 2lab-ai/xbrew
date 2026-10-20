@@ -94,7 +94,7 @@ xbrew bundle software.yaml software.arch.yaml
 Stuff that isn't a plain brew/pacman package is a tiny TOML recipe. A recipe is
 **authoritative** — if one exists for a name, xbrew installs it that way instead
 of guessing from a same-named brew/pacman package. Built-ins: `brew`, `claude`,
-`claude-code`, `dbotter`, `nomachine`, `rustdesk`, `slack`, `sunshine`, `telegram` — and
+`claude-code`, `dbotter`, `nomachine`, `rustdesk`, `slack`, `sunshine`, `telegram`, `zwallet` — and
 anything in the AUR works without a recipe at all. Add your own by dropping a
 file in `recipes/` (shipped) or `~/.xbrew/recipes/*.toml` (local):
 
