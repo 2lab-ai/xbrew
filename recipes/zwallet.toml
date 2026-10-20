@@ -1,0 +1,27 @@
+name = "zwallet"
+description = "zwallet — local wallet CLI for AI agents (EVM; a human-unlocked key daemon and a human-signed whitelist)"
+
+# Approved stable release:
+# tag v0.1.0, source e17b2bebb0c8e592dde5e37480d322b7548661f6
+# To bump: point both URLs at the new v* tag and copy each sha256 verbatim from
+# that release's SHA256SUMS, then update tests/zwallet_recipe_contract.rs to
+# match in the same commit.
+#
+# No Debian or RHEL backend: zwallet publishes no .deb/.rpm, only raw binaries.
+
+[arch.binary]
+name = "zwallet"
+
+[arch.binary.aarch64]
+url = "https://github.com/2lab-ai/zwallet/releases/download/v0.1.0/zwallet-linux-aarch64"
+sha256 = "8bc365232fb102ba3b737d51d8ee5a2afa672237a245bc324b392ad41e6c4681"
+
+[arch.binary.x86_64]
+url = "https://github.com/2lab-ai/zwallet/releases/download/v0.1.0/zwallet-linux-x86_64"
+sha256 = "131109e6b98572058f484ad9209d1001efe35d8aea77f73c1dc2c637bac0cfc3"
+
+[macos]
+# Fully-qualified stable formula from 2lab-ai's own tap; the token auto-taps on
+# install. The formula pins its own macOS assets, so the macOS version follows
+# the tap, not the pins above.
+formula = "2lab-ai/tap/zwallet"
